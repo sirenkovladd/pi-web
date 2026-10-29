@@ -10,6 +10,10 @@ Typecheck: `node_modules/.bin/tsc --noEmit` · Lint: `npm run lint`
 
 **Never run `next build` during dev**: it pollutes `.next/` and breaks `npm run dev`.
 
+### Vlad's setup (`vlad-setup` branch)
+
+This checkout is the running instance on Vlad's machine, served as production, not dev: `~/ai/scripts/pi-web-restart` kills `:30141` and launches `node bin/pi-web.js -p 30141 --no-open` from here (`next start`, the same shape as the published npm package). The mise-installed copy was removed. `.next/` therefore holds a production build — rebuild it with `npm run build` after pulling, and do dev work in a separate worktree so the two never fight over `.next/`. Local extras on top of `main`: none right now — the shell-command-text chat fix and pi SDK 1.4.0 both landed upstream in v0.13.0. Future local-only changes go here.
+
 ### Dev server troubleshooting
 
 - First run `lsof -nP -iTCP:30141 -sTCP:LISTEN` and reuse a healthy Pi Web process. A second `next dev` on another port is no workaround: both contend for `.next/dev/lock`.
