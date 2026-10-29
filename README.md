@@ -188,6 +188,12 @@ Before starting on a feature, read [Contributing](./CONTRIBUTING.md) for what is
 
 Contributor guides: [Internationalization](./docs/i18n.md) and [Release process](./docs/release.md).
 
+## Vlad's setup
+
+On Vlad's machine the served instance is this checkout's `vlad-setup` branch, not the npm package: `~/ai/scripts/pi-web-restart` runs production (`next start` through `bin/pi-web.js`) from `~/code/pi-web`, so rebuild with `npm run build` after pulling. The mise-installed copy was removed. Local extras on top of upstream `main`: none at the moment (the shell-command-text fix and pi SDK 1.4.0 both shipped in v0.13.0).
+
+Develop in a separate worktree; `.next/` here is the production build the server runs.
+
 ## Repository Layout
 
 ```text
