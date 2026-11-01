@@ -10,6 +10,10 @@ import { join } from "node:path";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
+// Marker every pi-web shell carries so host scripts can refuse to run from
+// inside the server they would kill (pi-web-restart): the pi CLI never sets it.
+export const PI_WEB_AGENT_ENV_VAR = "PI_WEB_AGENT";
+const PI_WEB_AGENT_ENV_VALUE = "1";
 // Pi's own abort path settles well within this once the process tree is gone.
 const ABORT_SETTLE_GRACE_MS = 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -86,6 +90,8 @@ export function createProjectCommandBashOperations(
         agentBinDir,
         platform,
       );
+      // Forced after the sanitize: even a project override must not unset it.
+      environment[PI_WEB_AGENT_ENV_VAR] = PI_WEB_AGENT_ENV_VALUE;
       const { onData, signal, timeout } = executionOptions;
       let released = false;
       const execution = localOperations.exec(command, cwd, {
