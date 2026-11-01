@@ -309,8 +309,7 @@ const SESSION_TOOL_NAMES = new Set<string>(["codemode", "tool_search", ...SUBAGE
  *
  * Order follows `carry`, the order the `pi` CLI declares for the same set: regrouping the
  * coding tools ahead rewrites the prompt's `<tools>` section and drops the provider's prompt
- * cache on every harness switch (#1405). Newly selected coding tools join behind the carried
- * coding tools, keeping one deterministic order for every harness.
+ * cache on every harness switch (#1405). Newly selected coding tools go at the end.
  */
 export function resolveActiveToolNames(
   session: AgentSessionLike,
@@ -325,24 +324,15 @@ export function resolveActiveToolNames(
     requested.filter((name) => codingToolNames.has(name)),
     session.settingsManager.getDefaultTools(),
   );
-  const selected = new Set(selectedToolNames);
-  const kept = carry.filter((name) => {
-    if (codingToolNames.has(name)) return selected.has(name);
+  // Survivors keep their carried positions: reshuffling them rewrites the
+  // prompt's <tools> section and drops the provider's prompt cache (#1405).
+  const carriedToolNames = carry.filter((name) => {
+    if (codingToolNames.has(name)) return selectedToolNames.includes(name);
     const tool = registered.get(name);
     return tool !== undefined && tool.exposure !== "hidden";
   });
-  const keptSet = new Set(kept);
-  const missing = selectedToolNames.filter((name) => !keptSet.has(name));
-  if (missing.length === 0) return [...keptSet];
-  let insertAt = -1;
-  for (let i = kept.length - 1; i >= 0; i--) {
-    if (codingToolNames.has(kept[i])) {
-      insertAt = i + 1;
-      break;
-    }
-  }
-  if (insertAt === -1) return [...new Set([...missing, ...kept])];
-  return [...new Set([...kept.slice(0, insertAt), ...missing, ...kept.slice(insertAt)])];
+
+  return [...carriedToolNames, ...selectedToolNames.filter((name) => !carriedToolNames.includes(name))];
 }
 
 /** pi's "Cannot submit a prompt while compaction is in progress" rejection. */
