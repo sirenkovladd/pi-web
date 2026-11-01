@@ -57,6 +57,10 @@ function shellEnvironment(): Record<string, string> {
   }
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
+  // Marker so host scripts (pi-web-restart) can refuse to run from inside the
+  // server they would kill; the pi CLI never sets it. Forced, like the login
+  // password is stripped: a project override must not unset it.
+  env.PI_WEB_AGENT = "1";
   // Windows shells (Git Bash / MSYS2, cmd, PowerShell) otherwise inherit the
   // system ANSI codepage (e.g. GBK on zh-CN) and mangle non-ASCII filenames.
   if (!process.env.LANG && !process.env.LC_ALL && !process.env.LC_CTYPE) env.LANG = "C.UTF-8";
