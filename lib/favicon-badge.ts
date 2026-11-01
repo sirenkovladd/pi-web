@@ -41,6 +41,21 @@ export function faviconBadgeKey(badge: FaviconBadge | null): string {
   return badge ? `${badge.kind}:${badge.count}` : "none";
 }
 
+/**
+ * The unread count the badge shows: the sidebar's unread markers plus the
+ * sessions that finished while the tab was hidden. Those are usually the
+ * selected session, which the markers exclude ("already looking" — false
+ * while hidden), so an id already marked is not counted twice (#1484).
+ */
+export function countFaviconUnread(unreadSessionIds: Set<string>, hiddenFinishedSessionIds?: Set<string>): number {
+  if (!hiddenFinishedSessionIds || hiddenFinishedSessionIds.size === 0) return unreadSessionIds.size;
+  let extra = 0;
+  for (const id of hiddenFinishedSessionIds) {
+    if (!unreadSessionIds.has(id)) extra += 1;
+  }
+  return unreadSessionIds.size + extra;
+}
+
 let lastSyncedKey: string | null = null;
 let baseIconPromise: Promise<HTMLImageElement | null> | null = null;
 let defaultIconUrl: string | null = null;
