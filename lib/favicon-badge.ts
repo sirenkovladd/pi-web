@@ -58,7 +58,7 @@ export function countFaviconUnread(unreadSessionIds: Set<string>, hiddenFinished
 
 let lastSyncedKey: string | null = null;
 let baseIconPromise: Promise<HTMLImageElement | null> | null = null;
-let defaultIconUrl: string | null = null;
+const defaultIconHrefs = new Map<HTMLLinkElement, string>();
 
 function getIconLinks(): HTMLLinkElement[] {
   return [...document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')];
@@ -118,12 +118,11 @@ export function syncFaviconBadge(counts: FaviconBadgeCounts): void {
   if (key === lastSyncedKey) return;
   lastSyncedKey = key;
   if (!badge) {
-    if (defaultIconUrl !== null) {
-      for (const link of getIconLinks()) link.href = defaultIconUrl;
-    }
+    for (const [link, href] of defaultIconHrefs) link.href = href;
     return;
   }
-  const links = getIconLinks();
-  if (links.length > 0 && defaultIconUrl === null) defaultIconUrl = links[0].href;
+  for (const link of getIconLinks()) {
+    if (!defaultIconHrefs.has(link)) defaultIconHrefs.set(link, link.href);
+  }
   void drawBadgedIcon(badge, key);
 }
