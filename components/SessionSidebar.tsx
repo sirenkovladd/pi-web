@@ -76,6 +76,7 @@ import {
   type ProjectMovePosition,
   type SessionUiStateRequest,
 } from "@/lib/session-ui-state-shared";
+import { syncFaviconBadge } from "@/lib/favicon-badge";
 import { focusIfLost, type FocusDocument } from "@/lib/stacked-dialog";
 import { noteRunningPoll } from "@/lib/page-debug";
 import { useFilesPlacement } from "@/hooks/useFilesPlacement";
@@ -1000,6 +1001,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     onSessionsChange?.(allSessions);
   }, [allSessions, onSessionsChange]);
+
+  // The tab strip's favicon mirrors what the rows show (#1483): a persistent
+  // badge after the completion sound fades, cleared the same way the blue dot is.
+  useEffect(() => {
+    syncFaviconBadge({ awaiting: awaitingInputSessionIds.size, unread: unreadSessionIds.size });
+  }, [awaitingInputSessionIds, unreadSessionIds]);
 
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
