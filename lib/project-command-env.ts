@@ -10,8 +10,9 @@ import { join } from "node:path";
 
 const HOST_EXTENSION_NAME = "pi-web-project-command-environment";
 const HOST_EXTENSION_PATH = `<inline:${HOST_EXTENSION_NAME}>`;
-// Marker every pi-web shell carries so host scripts can refuse to run from
-// inside the server they would kill (pi-web-restart): the pi CLI never sets it.
+// Marker every pi-web shell carries so a script can tell it was triggered
+// from a pi-web agent shell rather than the pi CLI or a manual shell.
+// The CLI never sets it.
 export const PI_WEB_AGENT_ENV_VAR = "PI_WEB_AGENT";
 const PI_WEB_AGENT_ENV_VALUE = "1";
 // Pi's own abort path settles well within this once the process tree is gone.

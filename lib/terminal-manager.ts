@@ -57,8 +57,8 @@ function shellEnvironment(): Record<string, string> {
   }
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
-  // Marker so host scripts (pi-web-restart) can refuse to run from inside the
-  // server they would kill; the pi CLI never sets it. Forced, like the login
+  // Marker so a script can tell it runs in a pi-web shell rather than the
+  // pi CLI or a manual shell; the CLI never sets it. Forced, like the login
   // password is stripped: a project override must not unset it.
   env.PI_WEB_AGENT = "1";
   // Windows shells (Git Bash / MSYS2, cmd, PowerShell) otherwise inherit the
