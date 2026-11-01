@@ -324,15 +324,13 @@ export function resolveActiveToolNames(
     requested.filter((name) => codingToolNames.has(name)),
     session.settingsManager.getDefaultTools(),
   );
-  // Survivors keep their carried positions: reshuffling them rewrites the
-  // prompt's <tools> section and drops the provider's prompt cache (#1405).
   const carriedToolNames = carry.filter((name) => {
     if (codingToolNames.has(name)) return selectedToolNames.includes(name);
     const tool = registered.get(name);
     return tool !== undefined && tool.exposure !== "hidden";
   });
 
-  return [...carriedToolNames, ...selectedToolNames.filter((name) => !carriedToolNames.includes(name))];
+  return [...new Set([...carriedToolNames, ...selectedToolNames])];
 }
 
 /** pi's "Cannot submit a prompt while compaction is in progress" rejection. */
@@ -949,9 +947,6 @@ export class AgentSessionWrapper {
           readSessionToolSelection(entries) ?? activeAfter,
           [...activeAfter, ...activeBefore.filter((name) => SESSION_TOOL_NAMES.has(name))],
         );
-      } else if (activeBefore.some((name, index) => name !== activeAfter[index])) {
-        // Same tools, other order: pi declares them in this order, so keep the previous one.
-        this.inner.setActiveToolsByName(activeBefore);
       }
     }
     return { cancelled: false };
