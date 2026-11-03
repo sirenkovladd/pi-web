@@ -157,6 +157,106 @@
   font-weight: 400;
 }
 
+/* The drafts shelf above the tree: unsent composers across projects.
+   The header keeps the sections' small capitals; rows run 28px like
+   session rows, the title in content color, everything else dim. */
+.sidebar-drafts {
+  padding: 4px 0;
+}
+
+.sidebar-drafts-header {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px 0 calc(var(--session-tree-inset-left) + 5px);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.sidebar-drafts-label {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sidebar-drafts-count {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.sidebar-drafts-row {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 0 var(--session-tree-inset-right) 0 var(--session-tree-inset-left);
+  padding: 0 4px 0 20px;
+  border-radius: 7px;
+}
+
+.sidebar-drafts-row:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-drafts-open {
+  display: flex;
+  flex: 1;
+  align-self: stretch;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-drafts-title {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-drafts-project,
+.sidebar-drafts-images,
+.sidebar-drafts-truncated,
+.sidebar-drafts-time {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sidebar-drafts-time {
+  margin-left: auto;
+}
+
+/* The status sections' headers: static labels, never toggles. The label
+   where the session titles start, small capitals in the label color, the
+   count in meta right after it. */
+.session-tree-status-header {
+  align-items: center;
+  padding: 0 8px 0 calc(var(--session-tree-inset-left) + 5px);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.session-tree-status-label {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.session-tree-status-count {
+  margin-left: 3px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
 /* 5px off the count and each other: the toggle's 3px gap is the chevron's. */
 .session-tree-pinned-dot {
   flex: none;
@@ -371,13 +471,17 @@ a.session-tree-main {
   white-space: nowrap;
 }
 
-/* A pinned row's project: meta, in the time's type (.session-tree-meta). */
+/* A pinned row's project: meta, in the time's type (.session-tree-meta).
+   Status rows name it beside the state too: never wrapped, cut with an
+   ellipsis (a wrapped "pi-"/"web" doubled the row's height). */
 .session-tree-project {
   display: inline-block;
+  flex: none;
   max-width: 70px;
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: bottom;
+  white-space: nowrap;
 }
 
 /* Always rendered, empty-looking while its buttons are hidden: a gap of its

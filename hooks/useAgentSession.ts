@@ -217,7 +217,7 @@ export interface UseAgentSessionOptions {
   /** A top-level tool call finished; the files it touched may have changed. */
   onToolEnd?: (toolName: string) => void;
   onAttentionNeeded?: (request: BlockingExtensionUiRequest) => void;
-  onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
+  onSessionCreated?: (session: SessionInfo, sourceDraftKey: string, options?: { background?: boolean }) => void;
   onSessionForked?: (newSessionId: string) => void;
   /** `/side`: a side chat was forked from this session; open its tab. The
    *  prompt argument, if any, seeds the new chat's composer. */
@@ -1006,7 +1006,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [onSystemToolsChange, setToolPresetState]);
 
-  const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
+  const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)", options?: { background?: boolean }) => {
     const sid = sessionIdRef.current;
     if (!isNew || !newSessionCwd || !sid || newSessionPromotedRef.current) return;
     newSessionPromotedRef.current = true;
@@ -1028,7 +1028,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       messageCount,
       firstMessage,
       transient: true,
-    }, provisionalDraftKey);
+    }, provisionalDraftKey, options);
+    if (options?.background) {
+      // Stay a fresh composer: the next background send mints its own
+      // session through ensureNewSession instead of appending to this one.
+      // (A send issued while this run is still active still joins it as a
+      // steer, like every send-while-running path.)
+      sessionIdRef.current = null;
+      ensuringNewSessionRef.current = null;
+      newSessionPromotedRef.current = false;
+    }
   }, [isNew, newSessionCwd, newSessionDraftKey, onSessionCreated, opts.chatInputRef]);
 
   const ensureNewSession = useCallback(async () => {
@@ -2055,7 +2064,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, applyLiveUsage, cancelEventStreamGrace, dispatch, handleExtensionUiRequest, loadSession, markPromptLanded, notifyPromptStage, onAgentEnd, onToolEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage, syncLiveModel]);
   handleAgentEventRef.current = handleAgentEvent;
 
-  const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
+  const handleSend = useCallback(async (message: string, images?: AttachedImage[], options?: { background?: boolean }) => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
     if (agentRunningRef.current || bashRunningRef.current) {
@@ -2158,7 +2167,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           ...(piImages?.length ? { images: piImages } : {}),
         });
         if (queuedAck?.queued) dropOptimisticUserMessage();
-        promoteNewSession(1, message);
+        promoteNewSession(1, message, options);
       } else if (session) {
         sentSessionId = session.id;
         await ensureEventsConnected(session.id);
@@ -2226,6 +2235,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       dispatch({ type: "end" });
     }
   }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, releaseUnconfirmedSend, cancelEventStreamGrace, closeEvents, composerDraftKey, dispatch, reconcileAgentState, restoreSubmission, editEntryId, setEdit]);
+
+  const handleSendBackground = useCallback((message: string, images?: AttachedImage[]) =>
+    handleSend(message, images, { background: true }), [handleSend]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -3369,7 +3381,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, startSideChat, handleFork, handleNavigate, handleModelChange,
+    handleSend, handleSendBackground, handleAbort, startSideChat, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     dismissCompactError,
     handleRecallQueue,

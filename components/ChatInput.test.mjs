@@ -110,6 +110,7 @@ test("follow-up shortcuts preserve newline, IME, mobile and completion behavior"
       atMenuOpen: false, atQuery: null, atMatches: [{}], atActiveIndex: 0,
       onSteer() {}, onFollowUp() {},
       sendQueued(mode) { action = mode; }, handleSend() { action = "send"; },
+      isNewComposer: false, onSendBackground: undefined, handleBackgroundSend() { action = "background"; },
       applySlashCommand() { action = "slash"; },
       submitsSlashCommandOnEnter, value: "", setSlashMenuOpen() {},
       applyAtCompletion() { action = "file"; },
@@ -1120,4 +1121,87 @@ test("grows the composer to its text and hides the scrollbar until the text is t
   autoGrowTextarea(tall);
   assert.equal(tall.style.height, "200px", "the box caps at 200 px");
   assert.equal(tall.style.overflowY, "auto", "capped text scrolls");
+});
+
+test("Cmd+S stashes the composer draft instead of the browser save dialog", () => {
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const file = ts.createSourceFile("ChatInput.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findHandler(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === "handleKeyDown") {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findHandler);
+  }
+  const script = new Script(ts.transpileModule(findHandler(file).getText(file), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText);
+  for (const keys of [{ metaKey: true }, { ctrlKey: true }]) {
+    let action = "native";
+    let stashed = false;
+    const handler = script.runInNewContext({
+      Date: { now: () => 1000 },
+      COMPOSITION_END_ENTER_GRACE_MS: 100,
+      isMobile: false, isStreaming: false, enterSendMode: "enter",
+      isComposingRef: { current: false }, lastCompositionEndAtRef: { current: 0 },
+      historyMenuOpen: false, slashMenuOpen: false, slashQuery: null, atMenuOpen: false, atQuery: null,
+      stashComposerDraft() { stashed = true; return true; },
+    });
+    handler({
+      key: "s", shiftKey: false, altKey: false, ctrlKey: false, metaKey: false,
+      nativeEvent: { isComposing: false, keyCode: 83 },
+      preventDefault() { action = "prevented"; },
+      ...keys,
+    });
+    assert.equal(action, "prevented", JSON.stringify(keys));
+    assert.equal(stashed, true, JSON.stringify(keys));
+  }
+});
+
+test("Cmd+Enter in a fresh composer sends in the background without navigating", () => {
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const file = ts.createSourceFile("ChatInput.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findHandler(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === "handleKeyDown") {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findHandler);
+  }
+  const script = new Script(ts.transpileModule(findHandler(file).getText(file), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText);
+  const run = ({ keys = {}, state = {} }) => {
+    let action = "native";
+    const handler = script.runInNewContext({
+      Date: { now: () => 1000 },
+      COMPOSITION_END_ENTER_GRACE_MS: 100,
+      isMobile: false, isStreaming: false, enterSendMode: "enter",
+      isComposingRef: { current: false }, lastCompositionEndAtRef: { current: 0 },
+      historyMenuOpen: false, slashMenuOpen: false, slashQuery: null, atMenuOpen: false, atQuery: null,
+      isNewComposer: false,
+      value: "", attachedImages: [],
+      onSendBackground() {},
+      handleBackgroundSend() { action = "background"; },
+      handleSend() { action = "send"; },
+      ...state,
+    });
+    handler({
+      key: "Enter", shiftKey: false, altKey: false, ctrlKey: false, metaKey: false,
+      nativeEvent: { isComposing: false, keyCode: 13 },
+      preventDefault() { if (action === "native") action = "prevented"; },
+      ...keys,
+    });
+    return action;
+  };
+  assert.equal(run({ keys: { metaKey: true }, state: { isNewComposer: true, value: "hi" } }), "background");
+  assert.equal(run({ keys: { ctrlKey: true }, state: { isNewComposer: true, value: "hi" } }), "background");
+  assert.equal(run({ keys: { metaKey: true }, state: { isNewComposer: true, value: "  ", attachedImages: [] } }), "send", "empty Cmd+Enter reaches the foreground guard, which no-ops without creating a session");
+  assert.equal(run({ keys: { metaKey: true }, state: { isNewComposer: false, value: "hi" } }), "send", "follow-up composers keep foreground send");
+  assert.equal(run({ keys: { metaKey: true }, state: { isNewComposer: true, value: "hi", enterSendMode: "ctrlEnter" } }), "send", "ctrlEnter mode keeps its foreground send");
+  assert.equal(run({ keys: { metaKey: true }, state: { isNewComposer: true, value: "hi", onSendBackground: undefined } }), "send", "no background handler falls back to send");
+});
+
+test("the drafts shelf mirrors fresh composers only, never chats with history", () => {
+  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  assert.match(source, /if \(cwd && isNewComposer\) \{\n\s+getDraftCardsStore\(\)\.upsertAuto\(/);
+  assert.match(source, /if \(!cwd \|\| !isNewComposer \|\| \(\!value\.trim\(\)/);
 });

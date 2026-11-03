@@ -13,6 +13,8 @@ import {
   setDraft,
   type ChatDraftImage,
 } from "@/lib/draft-store";
+import { getDraftCardsStore } from "@/lib/drafts-store";
+import { workspaceKeyOf } from "@/lib/workspace-memory";
 import {
   MAX_ATTACHED_IMAGE_BYTES,
   MAX_ATTACHED_IMAGES,
@@ -47,6 +49,10 @@ export interface AttachedImage {
 
 interface Props {
   onSend: (message: string, images?: AttachedImage[]) => void;
+  /** Background send (Cmd/Ctrl+Enter in a fresh composer): same delivery, no navigation. Absent outside fresh composers. */
+  onSendBackground?: (message: string, images?: AttachedImage[]) => void;
+  /** True while this composer starts new sessions: enables background send. */
+  isNewComposer?: boolean;
   onAbort: () => void;
   onSteer?: (message: string, images?: AttachedImage[]) => void;
   /** Sends the draft to a new side chat instead of the running agent. */
@@ -692,6 +698,7 @@ export function ModelScopeWarningBanner({ warnings }: { warnings?: string[] }) {
 // chat around it re-renders through both.
 export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onSideChat, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, missingCwd, modelScopeWarnings, allModelList, onLoadAllModels, onModelChange, modelSwitching,
+  onSendBackground, isNewComposer,
   defaultModel, onSetDefaultModel,
   onCompact, onAbortCompaction, isCompacting, compactError, onDismissCompactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, isAutoThinkingSelection = false, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
@@ -1025,11 +1032,18 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
 
   useEffect(() => {
     if (!draftKey || draftKeyRef.current !== draftKey) return;
-    setDraft(draftKey, {
-      value,
-      images: attachedImages.map(imageToDraftImage),
-    });
-  }, [attachedImages, draftKey, value]);
+    const images = attachedImages.map(imageToDraftImage);
+    setDraft(draftKey, { value, images });
+    // The drafts shelf mirrors fresh composers only: a chat with history
+    // keeps its parked per-session draft, never a shelf card (opening one
+    // starts a new chat, so it must never carry another chat's text).
+    if (cwd && isNewComposer) {
+      getDraftCardsStore().upsertAuto(
+        { key: draftKey, cwd, projectKey: workspaceKeyOf({ cwd }), value, images },
+        Date.now(),
+      );
+    }
+  }, [attachedImages, cwd, draftKey, isNewComposer, value]);
 
   useEffect(() => {
     const previousDraftKey = draftKeyRef.current;
@@ -1121,6 +1135,27 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       setBuiltinCommandPending(false);
     }
   }, [attachedImages.length, clearInput, onBuiltinCommand]);
+
+  // Cmd/Ctrl+S stashes the fresh composer's content as a drafts-shelf card
+  // of its own (never merged): pick it back up here or in any other
+  // project. A chat with history keeps its parked per-session draft instead.
+  const stashComposerDraft = useCallback(() => {
+    const images = attachedImages.map(imageToDraftImage);
+    if (!cwd || !isNewComposer || (!value.trim() && images.length === 0)) return false;
+    getDraftCardsStore().stash({ cwd, projectKey: workspaceKeyOf({ cwd }), value, images }, Date.now());
+    return true;
+  }, [attachedImages, cwd, isNewComposer, value]);
+
+  const handleBackgroundSend = useCallback(async () => {
+    const msg = value.trim();
+    if (!msg && !attachedImages.length) return;
+    onAudioUnlock?.();
+    const builtinAllowed = !isStreaming || offersBuiltinSlashCommandWhileStreaming(msg);
+    if (builtinAllowed && await runBuiltinCommand(msg)) return;
+    if (isStreaming) return;
+    clearInput();
+    (onSendBackground ?? onSend)(msg, attachedImages.length ? attachedImages : undefined);
+  }, [value, attachedImages, isStreaming, runBuiltinCommand, onSendBackground, onSend, clearInput, onAudioUnlock]);
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();
@@ -1440,6 +1475,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return;
       }
 
+      // Cmd/Ctrl+S stashes the draft; it never reaches the browser's
+      // save-page dialog.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && !isComposing) {
+        e.preventDefault();
+        stashComposerDraft();
+        return;
+      }
+
       if (historyMenuOpen && !isComposing) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -1548,6 +1591,19 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         return;
       }
 
+      // Cmd/Ctrl+Enter in a fresh composer fires in the background: the run
+      // surfaces in Working while this view stays put. Default send mode
+      // only: ctrlEnter mode keeps Cmd/Ctrl+Enter as its foreground send.
+      // After the menus (an open one keeps its keys), before the send
+      // shortcut both modes share. Empty stays a no-op (no session made).
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !e.shiftKey && !isComposing
+        && isNewComposer && enterSendMode !== "ctrlEnter" && onSendBackground
+        && (value.trim() || attachedImages.length)) {
+        e.preventDefault();
+        void handleBackgroundSend();
+        return;
+      }
+
       if (sendShortcut) {
         e.preventDefault();
         if (isStreaming && (onSteer || onFollowUp)) {
@@ -1557,7 +1613,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         }
       }
     },
-    [isMobile, enterSendMode, isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
+    [isMobile, enterSendMode, isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, handleBackgroundSend, isNewComposer, onSendBackground, attachedImages.length, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value, stashComposerDraft]
   );
 
   const handleInput = useCallback(() => {

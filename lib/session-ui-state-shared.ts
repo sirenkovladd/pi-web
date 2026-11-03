@@ -29,8 +29,11 @@ export const MAX_PROJECT_NAMES = 1000;
 /** Most UTF-8 bytes `projectNames` takes as JSON: its keys are projectKeys, as long as the order's. */
 export const PROJECT_NAMES_MAX_BYTES = 256 * 1024;
 
-/** Epoch ms, keyed by the FAMILY ROOT session id. */
-export interface SessionUiFamilyState { pinnedAt?: number; archivedAt?: number }
+/** Epoch ms, keyed by the FAMILY ROOT session id. needsYouAt marks a family
+    whose attention was observed (awaiting, unread, or a watched run's end):
+    it stays in Needs you until Settle files it away or Archive takes it.
+    Reading, pinning and typing never clear it; new activity re-stamps it. */
+export interface SessionUiFamilyState { pinnedAt?: number; archivedAt?: number; needsYouAt?: number }
 /** Keyed by projectKey (`workspaceKeyOf`). */
 export interface SessionUiProjectState { pinnedAt: number; root: string }
 export interface SessionUiState {
@@ -56,11 +59,12 @@ export interface SessionUiState {
 /** Where a moved project goes, next to its anchor. */
 export type ProjectMovePosition = "before" | "after";
 /** One family's flags before a change, for undo; null = absent. */
-export interface SessionUiFlagsSnapshot { id: string; pinnedAt: number | null; archivedAt: number | null }
+export interface SessionUiFlagsSnapshot { id: string; pinnedAt: number | null; archivedAt: number | null; needsYouAt: number | null }
 
 export type SessionUiStateRequest =
   | { action: "set"; ids: string[]; pinned: boolean }
   | { action: "set"; ids: string[]; archived: boolean }
+  | { action: "set"; ids: string[]; needsYou: boolean }
   /** Undo: writes back exact prior values (null = absent). */
   | { action: "restore"; entries: SessionUiFlagsSnapshot[] }
   | { action: "pin-project"; projectKey: string; root: string; pinned: boolean }
@@ -186,7 +190,8 @@ function normalizeFamily(value: unknown): SessionUiFamilyState | null {
   const family: SessionUiFamilyState = {};
   if (isTimestamp(value.pinnedAt)) family.pinnedAt = value.pinnedAt;
   if (isTimestamp(value.archivedAt)) family.archivedAt = value.archivedAt;
-  return family.pinnedAt === undefined && family.archivedAt === undefined ? null : family;
+  if (isTimestamp(value.needsYouAt)) family.needsYouAt = value.needsYouAt;
+  return family.pinnedAt === undefined && family.archivedAt === undefined && family.needsYouAt === undefined ? null : family;
 }
 
 function normalizeProject(value: unknown): SessionUiProjectState | null {
@@ -295,18 +300,14 @@ export function parseSessionUiStateRequest(body: unknown): ParseResult {
   if (!isPlainObject(body)) return { ok: false, error: "Expected a JSON object" };
   switch (body.action) {
     case "set": {
-      const hasPinned = hasOwn(body, "pinned");
-      if (hasPinned === hasOwn(body, "archived")) return { ok: false, error: "Send exactly one of pinned or archived" };
-      const value = hasPinned ? body.pinned : body.archived;
-      if (typeof value !== "boolean") return { ok: false, error: `${hasPinned ? "pinned" : "archived"} must be a boolean` };
+      const keys = ["pinned", "archived", "needsYou"].filter((key) => hasOwn(body, key));
+      if (keys.length !== 1) return { ok: false, error: "Send exactly one of pinned, archived or needsYou" };
+      const key = keys[0];
+      const value = body[key];
+      if (typeof value !== "boolean") return { ok: false, error: `${key} must be a boolean` };
       const ids = parseIds(body.ids);
       if (!ids.ok) return ids;
-      return {
-        ok: true,
-        request: hasPinned
-          ? { action: "set", ids: ids.ids, pinned: value }
-          : { action: "set", ids: ids.ids, archived: value },
-      };
+      return { ok: true, request: { action: "set", ids: ids.ids, [key]: value } as SessionUiStateRequest };
     }
     case "restore": {
       const raw = body.entries;
@@ -323,10 +324,11 @@ export function parseSessionUiStateRequest(body: unknown): ParseResult {
         seen.add(entry.id);
         const pinnedAt = parseSnapshotValue(entry.pinnedAt);
         const archivedAt = parseSnapshotValue(entry.archivedAt);
-        if (pinnedAt === undefined || archivedAt === undefined) {
-          return { ok: false, error: "pinnedAt and archivedAt must be timestamps or null" };
+        const needsYouAt = parseSnapshotValue(entry.needsYouAt);
+        if (pinnedAt === undefined || archivedAt === undefined || needsYouAt === undefined) {
+          return { ok: false, error: "pinnedAt, archivedAt and needsYouAt must be timestamps or null" };
         }
-        entries.push({ id: entry.id, pinnedAt, archivedAt });
+        entries.push({ id: entry.id, pinnedAt, archivedAt, needsYouAt });
       }
       return { ok: true, request: { action: "restore", entries } };
     }
@@ -372,13 +374,13 @@ export function parseSessionUiStateRequest(body: unknown): ParseResult {
 }
 
 function sameFamily(a: SessionUiFamilyState | undefined, b: SessionUiFamilyState): boolean {
-  return a?.pinnedAt === b.pinnedAt && a?.archivedAt === b.archivedAt;
+  return a?.pinnedAt === b.pinnedAt && a?.archivedAt === b.archivedAt && a?.needsYouAt === b.needsYouAt;
 }
 
 /** Stores `next` for `id` (an empty entry is removed) and says whether that changed anything. */
 function writeFamily(sessions: Record<string, SessionUiFamilyState>, id: string, next: SessionUiFamilyState): boolean {
   const previous = hasOwn(sessions, id) ? sessions[id] : undefined;
-  const empty = next.pinnedAt === undefined && next.archivedAt === undefined;
+  const empty = next.pinnedAt === undefined && next.archivedAt === undefined && next.needsYouAt === undefined;
   if (empty) {
     if (!previous) return false;
     delete sessions[id];
@@ -399,14 +401,25 @@ function nextFamily(
     if (!request.pinned) {
       delete next.pinnedAt;
     } else if (next.pinnedAt === undefined || next.archivedAt !== undefined) {
-      // Pin and archive exclude each other: pinning an archived family restores it.
+      // Pin and archive exclude each other: pinning an archived family restores it. The flag stands: unpinning sends it back to Needs you.
       next.pinnedAt = now;
       delete next.archivedAt;
     }
     return next;
   }
+  if ("needsYou" in request) {
+    // Filing: Settle clears the flag and the family drops to its group as a
+    // plain row; stamping marks observed attention. Typing re-stamps through
+    // the observe path, so there is no un-settle.
+    if (request.needsYou) {
+      next.needsYouAt = now;
+    } else {
+      delete next.needsYouAt;
+    }
+    return next;
+  }
   if (request.archived) {
-    // Archiving again refreshes the time, so a family that came back with new activity can be archived again.
+    // Archiving again refreshes the time, so a family that came back with new activity can be archived again. The flag stands: restoring sends it back to Needs you.
     next.archivedAt = now;
     delete next.pinnedAt;
   } else {
@@ -571,6 +584,7 @@ export function applySessionUiStateRequest(
         const family: SessionUiFamilyState = {};
         if (entry.pinnedAt !== null) family.pinnedAt = entry.pinnedAt;
         if (entry.archivedAt !== null) family.archivedAt = entry.archivedAt;
+        if (entry.needsYouAt !== null) family.needsYouAt = entry.needsYouAt;
         if (writeFamily(next.sessions, entry.id, family)) changed = true;
       }
       break;
@@ -638,7 +652,7 @@ export function snapshotSessionUiFlags(state: SessionUiState, ids: readonly stri
     if (seen.has(id)) continue;
     seen.add(id);
     const entry = hasOwn(state.sessions, id) ? state.sessions[id] : undefined;
-    snapshot.push({ id, pinnedAt: entry?.pinnedAt ?? null, archivedAt: entry?.archivedAt ?? null });
+    snapshot.push({ id, pinnedAt: entry?.pinnedAt ?? null, archivedAt: entry?.archivedAt ?? null, needsYouAt: entry?.needsYouAt ?? null });
   }
   return snapshot;
 }

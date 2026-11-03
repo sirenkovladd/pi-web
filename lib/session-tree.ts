@@ -25,7 +25,7 @@ import { workspaceKeyOf } from "./workspace-memory";
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
   | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
-  | "spacer" | "footer-open" | "footer-archived" | "archive-group";
+  | "needs-header" | "working-header" | "spacer" | "footer-open" | "footer-archived" | "archive-group";
 
 /**
  * Per-kind row heights: one rhythm. Session rows, the section headers (a
@@ -36,11 +36,15 @@ export type SidebarRowKind =
  * group from the next and the groups from the footer.
  */
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
-  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
+  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, "needs-header": 28, "working-header": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
+  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, "needs-header": 44, "working-header": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
+/** Visible Needs-you families before "show more": awaiting lists first, so the cap never hides one behind unread. */
+export const NEEDS_VISIBLE_LIMIT = 8;
+/** `moreShown` entry for the Needs-you section's "show more". */
+export const NEEDS_MORE_KEY = "needs";
 /** How many more families each "show more" click reveals. */
 export const SHOW_MORE_STEP = 20;
 /** `moreShown` entry for the pinned section's "show more". */
@@ -51,17 +55,19 @@ export const PINNED_MORE_KEY = "pinned";
  * (`customName`, from its group menu's Rename…), else its folder's name.
  */
 export interface SidebarProject { key: string; root: string; name: string; customName: string | null; pinned: boolean; current: boolean }
-export interface SidebarFamilyStatus { running: boolean; awaiting: boolean; unread: boolean; selected: boolean; transient: boolean }
+export interface SidebarFamilyStatus { running: boolean; awaiting: boolean; unread: boolean; selected: boolean; transient: boolean; flagged: boolean }
 
 // A folded header's counts follow its rows' right column: a family awaiting
 // input counts as awaiting, not running.
 export type SidebarRow =
   | { kind: "pinned-header"; key: "pinned-header"; count: number; collapsed: boolean; running: number; awaiting: number; unread: number }
-  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "archive"; project: SidebarProject; status: SidebarFamilyStatus }
+  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "needs" | "working" | "archive"; project: SidebarProject; status: SidebarFamilyStatus }
   | { kind: "pinned-more"; key: "pinned-more"; hidden: number; canShowLess: boolean; nextShown: number }
   | { kind: "group"; key: string; project: SidebarProject; expanded: boolean; running: number; awaiting: number; unread: number }
   | { kind: "group-more"; key: string; projectKey: string; hidden: number; canShowLess: boolean; nextShown: number }
-  | { kind: "group-empty"; key: string; project: SidebarProject }
+  | { kind: "group-empty"; key: string; project: SidebarProject; liveAbove?: number }
+  | { kind: "needs-header"; key: "needs-header"; count: number }
+  | { kind: "working-header"; key: "working-header"; count: number }
   | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
@@ -159,10 +165,56 @@ export function isFamilyArchived(family: SessionFamily, state: SessionUiState, r
   return Number.isNaN(modified) || archivedAt >= modified;
 }
 
-/** pinnedAt set AND not isFamilyArchived. */
+/** pinnedAt set and not archived (a run reads through: the row already shows it). */
 export function isFamilyPinned(family: SessionFamily, state: SessionUiState, runningIds: ReadonlySet<string>): boolean {
   return finiteNumber(familyEntry(state, family.root.id)?.pinnedAt) !== null
     && !isFamilyArchived(family, state, runningIds);
+}
+
+/** A family stays in Needs you once its attention was observed, even after
+    the dot is read away: only Settle (or Archive) files it out. */
+export function isFamilyFlagged(family: SessionFamily, state: SessionUiState): boolean {
+  return finiteNumber(familyEntry(state, family.root.id)?.needsYouAt) !== null;
+}
+
+/**
+ * Family roots of `ids` (session or member ids) that raise attention but
+ * carry no flag yet. Pinned and archived families keep their home, so they
+ * are skipped; unknown ids resolve to no family and drop out.
+ */
+export function attentionRootsNeedingFlag(
+  sessions: readonly SessionInfo[],
+  state: SessionUiState,
+  ids: ReadonlySet<string>,
+): string[] {
+  if (ids.size === 0) return [];
+  const emptyRunning = new Set<string>();
+  const roots: string[] = [];
+  for (const family of listSessionFamilies(sessions)) {
+    if (!anyMemberIn(family, ids)) continue;
+    if (isFamilyFlagged(family, state)) continue;
+    if (isFamilyPinned(family, state, emptyRunning) || isFamilyArchived(family, state, emptyRunning)) continue;
+    roots.push(family.root.id);
+  }
+  return roots;
+}
+
+/**
+ * The open chat whose run just ended: it owes a Needs-you stamp like any
+ * other completion (the unread path skips the selected session, so without
+ * this a watched run would fall back to its group). Hidden and suppressed
+ * runs stay silent.
+ */
+export function finishedSelectedSession(
+  previousActive: ReadonlySet<string>,
+  active: ReadonlySet<string>,
+  selectedSessionId: string | null,
+  skipIds: ReadonlySet<string>,
+): string[] {
+  if (selectedSessionId === null) return [];
+  if (!previousActive.has(selectedSessionId) || active.has(selectedSessionId)) return [];
+  if (skipIds.has(selectedSessionId)) return [];
+  return [selectedSessionId];
 }
 
 /** Last path segment of a project root, for "/" and "\\" paths alike. */
@@ -244,6 +296,7 @@ function familyStatus(family: SessionFamily, input: FamilyFlagsInput): SidebarFa
     unread: anyMemberIn(family, input.unreadIds),
     selected: isMember(family, input.selectedSessionId),
     transient: family.root.transient === true,
+    flagged: isFamilyFlagged(family, input.uiState),
   };
 }
 
@@ -313,7 +366,7 @@ function createProjectResolver(
 
 function sessionRow(
   family: SessionFamily,
-  context: "pinned" | "group" | "archive",
+  context: "pinned" | "group" | "needs" | "working" | "archive",
   project: SidebarProject,
   input: FamilyFlagsInput,
 ): SidebarRow {
@@ -423,6 +476,15 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
 
   let archivedCount = 0;
   const pinnedFamilies: SessionFamily[] = [];
+  // Awaiting lists in full (input order is newest first), then flagged
+  // families newest first: a flag outlives the read, so only Settle or
+  // Archive files a family out of Needs you. The cap below covers flagged
+  // only, so it never hides an awaiting family.
+  const needsAwaiting: SessionFamily[] = [];
+  const needsFlagged: SessionFamily[] = [];
+  const workingFamilies: SessionFamily[] = [];
+  // Per project, families shown in the status sections above the groups.
+  const liveAbove = new Map<string, number>();
   // Insertion order follows family activity (newest first).
   const projectFamilies = new Map<string, SessionFamily[]>();
   const projectActivity = new Map<string, number>();
@@ -439,6 +501,26 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     const activity = timeOf(family.latestModified);
     projectActivity.set(key, Math.max(projectActivity.get(key) ?? -Infinity, activity));
     if (!family.root.transient) savedKeys.add(key);
+    if (!isFamilyPinned(family, uiState, runningIds)) {
+      const status = familyStatus(family, input);
+      if (status.awaiting) {
+        needsAwaiting.push(family);
+        liveAbove.set(key, (liveAbove.get(key) ?? 0) + 1);
+        continue;
+      }
+      if (status.running) {
+        workingFamilies.push(family);
+        liveAbove.set(key, (liveAbove.get(key) ?? 0) + 1);
+        continue;
+      }
+      if (status.flagged) {
+        needsFlagged.push(family);
+        liveAbove.set(key, (liveAbove.get(key) ?? 0) + 1);
+        continue;
+      }
+    }
+    // Filed: everything else is a plain row in its group. Settle only
+    // clears the flag; typing re-stamps through the observe path.
     if (isFamilyPinned(family, uiState, runningIds)) {
       pinnedFamilies.push(family);
       continue;
@@ -449,7 +531,13 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   }
 
   // A spacer keeps the first section's header off the toolbar's line (#1338).
+  // One spacer parts two blocks, never two in a row: a block that follows
+  // a spacer (the first group after the pinned section, the footer after
+  // nothing) adds none.
   const rows: SidebarRow[] = [{ kind: "spacer", key: "top-spacer" }];
+  const gap = (key: `group-spacer:${string}` | "footer-spacer") => {
+    if (rows[rows.length - 1]?.kind !== "spacer") rows.push({ kind: "spacer", key });
+  };
 
   // Pinned section: newest pin first; ties keep family activity order.
   if (pinnedFamilies.length > 0) {
@@ -472,6 +560,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   }
 
   // Projects: live non-pinned families, the current project, pinned projects.
+  // A project of settled families only still gets its group.
   const projectKeys: string[] = [...projectFamilies.keys()];
   const seen = new Set(projectKeys);
   const addKey = (key: string) => {
@@ -520,18 +609,42 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     .filter((project) => !rank.has(project.key) && recordable(project))
     .map((project) => project.key);
 
-  for (const [index, project] of orderedProjects.entries()) {
+  // Needs you, then Working: global sections over every project, newest
+  // first within each. Awaiting lists in full before flagged; the cap below
+  // covers flagged only, so it never hides an awaiting family. Unread and
+  // running flags are meaningless inside these lists (every row has one),
+  // so the show-more window counts selected rows only.
+  const needsFamilies = [...needsAwaiting, ...needsFlagged];
+  const needsFlags = { ...input, awaitingIds: undefined, unreadIds: new Set<string>() };
+  if (needsFamilies.length > 0) {
+    gap("group-spacer:needs");
+    rows.push({ kind: "needs-header", key: "needs-header", count: needsFamilies.length });
+    const unreadBudget = Math.max(0, NEEDS_VISIBLE_LIMIT - needsAwaiting.length);
+    const { visible: visibleUnread, revealed, nextShown } = visibleFamilies(needsFlagged, unreadBudget, shownMoreFor(input.moreShown, NEEDS_MORE_KEY), needsFlags);
+    for (const family of needsAwaiting) rows.push(sessionRow(family, "needs", resolver.get(familyProjectKey(family)), input));
+    for (const family of visibleUnread) rows.push(sessionRow(family, "needs", resolver.get(familyProjectKey(family)), input));
+    const more = moreRowState(needsFamilies.length, needsAwaiting.length + visibleUnread.length, revealed);
+    if (more) rows.push({ kind: "group-more", key: "more:needs", projectKey: NEEDS_MORE_KEY, ...more, nextShown });
+  }
+  if (workingFamilies.length > 0) {
+    gap("group-spacer:working");
+    rows.push({ kind: "working-header", key: "working-header", count: workingFamilies.length });
+    for (const family of workingFamilies) rows.push(sessionRow(family, "working", resolver.get(familyProjectKey(family)), input));
+  }
+
+  for (const project of orderedProjects) {
     // A gap between two groups, open or folded (#1338): headers right on the
     // rows above them read as one list.
-    if (index > 0) rows.push({ kind: "spacer", key: `group-spacer:${project.key}` });
+    gap(`group-spacer:${project.key}`);
     const groupFamilies = projectFamilies.get(project.key) ?? [];
     const expanded = isGroupExpanded(project, input.groupExpansion);
     const { running, awaiting, unread } = activityCounts(groupFamilies, input);
     rows.push({ kind: "group", key: `group:${project.key}`, project, expanded, running, awaiting, unread });
 
     if (expanded) {
+      const above = liveAbove.get(project.key) ?? 0;
       if (groupFamilies.length === 0) {
-        rows.push({ kind: "group-empty", key: `empty:${project.key}`, project });
+        rows.push({ kind: "group-empty", key: `empty:${project.key}`, project, ...(above > 0 ? { liveAbove: above } : {}) });
       } else {
         const { visible, revealed, nextShown } = visibleFamilies(groupFamilies, GROUP_VISIBLE_LIMIT, shownMoreFor(input.moreShown, project.key), input);
         for (const family of visible) rows.push(sessionRow(family, "group", project, input));
@@ -543,7 +656,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
 
   // One spacer parts the groups from the footer, as one parts the pinned
   // section from them.
-  if (orderedProjects.length > 0) rows.push({ kind: "spacer", key: "footer-spacer" });
+  gap("footer-spacer");
   rows.push({ kind: "footer-open", key: "footer-open" });
   if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
 
@@ -613,9 +726,10 @@ export function buildArchiveRows(
 }
 
 /**
- * Root ids of live, non-pinned, non-running, non-unread, non-selected
- * families of `projectKey` whose latestModified is older than
+ * Root ids of idle, non-pinned, non-flagged, non-running, non-unread,
+ * non-selected families of `projectKey` whose latestModified is older than
  * now - olderThanMs. Transient families have no file and are never archived.
+ * Flagged families stay for triage: the bulk sweep never takes Needs you.
  */
 export function familiesToArchive(
   input: Pick<SessionTreeInput, "sessions" | "uiState" | "runningIds" | "unreadIds" | "selectedSessionId">,
@@ -628,6 +742,7 @@ export function familiesToArchive(
   for (const family of listSessionFamilies(input.sessions)) {
     if (familyProjectKey(family) !== projectKey) continue;
     if (isFamilyArchived(family, input.uiState, input.runningIds)) continue;
+    if (isFamilyFlagged(family, input.uiState)) continue;
     if (isFamilyPinned(family, input.uiState, input.runningIds)) continue;
     const status = familyStatus(family, input);
     if (status.running || status.unread || status.selected || status.transient) continue;

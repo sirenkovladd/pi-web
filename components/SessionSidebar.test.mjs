@@ -110,7 +110,7 @@ test("subagents fold into their main session row, which carries their running, u
   }));
   const sessionRows = rows.filter((row) => row.kind === "session");
   assert.deepEqual(sessionRows.map((row) => row.family.root.id), ["main"]);
-  assert.deepEqual(sessionRows[0].status, { running: true, awaiting: false, unread: true, selected: true, transient: false });
+  assert.deepEqual(sessionRows[0].status, { running: true, awaiting: false, unread: true, selected: true, transient: false, flagged: false });
 });
 
 test("only Shift skips the session deletion confirmation", () => {
@@ -482,4 +482,79 @@ test("the favicon counts sessions that finished while the tab was hidden (#1484)
     source,
     /\}, \[awaitingInputSessionIds, unreadSessionIds, hiddenFinishedSessionIds\]\);/,
   );
+});
+
+test("settling files the flag with Undo; there is no un-settle", () => {
+  const settle = callbackBody("settleFamily");
+  assert.match(settle, /needsYou: false/);
+  assert.match(settle, /action: "restore"/);
+  assert.match(settle, /sidebar\.settledToast/);
+  // Typing re-stamps through the observe path, so no code path files back.
+  assert.doesNotMatch(source, /unsettleFamily/);
+  assert.doesNotMatch(source, /onUnsettleFamily/);
+  assert.doesNotMatch(source, /sidebar\.unsettle/);
+  assert.doesNotMatch(source, /sidebar\.unsettledToast/);
+  // Settled families are plain group rows now: no shelf, no unfold, no toggle.
+  assert.doesNotMatch(source, /setSettledExpansion/);
+  assert.doesNotMatch(source, /settledExpansion/);
+  assert.doesNotMatch(source, /onToggleSettled/);
+  assert.doesNotMatch(sidebarStyles, /\.session-tree-settled-header/);
+  // A settled row is found where the tree shows it now, like pinned/group/needs/working/archive rows.
+  assert.match(source, /\["pinned", "group", "needs", "working", "archive"\]/);
+});
+
+test("status rows are found where the inbox shows them, with their project on the row", () => {
+  // familyRowButton covers the status contexts; show-more reuses its key
+  // through the generic moreShown plumbing (NEEDS_MORE_KEY lives in the tree).
+  assert.match(source, /\["pinned", "group", "needs", "working", "archive"\]/);
+});
+
+test("search excludes only archived sessions; status rows need no unfold to select", () => {
+  assert.match(source, /archivedSessionIds=\{archiveIndex\.ids\}/);
+  assert.doesNotMatch(source, /needsIds|workingIds|statusIds|excludedIds/);
+});
+
+test("the sessions doc names the status inbox and the settle rule", async () => {
+  const docs = await readFile(new URL("../docs/agents/sessions.md", import.meta.url), "utf8");
+  assert.match(docs, /Needs you/);
+  assert.match(docs, /Working/);
+  assert.match(docs, /needsYouAt/);
+});
+
+test("the drafts shelf lists unsent cards with Open and Delete", async () => {
+  const { getDraftCardsStore } = await jiti.import("@/lib/drafts-store.ts");
+  const store = getDraftCardsStore();
+  store.upsertAuto({ key: "new:s1:/work/alpha", cwd: "/work/alpha", projectKey: "/work/alpha", value: "migrate auth\nsecond line", images: [] }, 1000);
+  const html = render({});
+  assert.match(html, /Drafts/);
+  assert.match(html, /<span class="sidebar-drafts-title">migrate auth<\/span>/);
+  assert.doesNotMatch(html, /<span class="sidebar-drafts-title">[^<]*second line/);
+  assert.match(html, /aria-label="Delete draft"/);
+  store.upsertAuto({ key: "new:s1:/work/alpha", cwd: "/work/alpha", projectKey: "/work/alpha", value: "", images: [] }, 2000);
+  assert.doesNotMatch(render({}), /sidebar-drafts-row/);
+  // Opening parks the card for the fresh composer in its cwd.
+  const opened = callbackBody("openDraftCard");
+  assert.match(opened, /parkedNewSessionDraftKey/);
+  assert.match(opened, /startNewSessionIn/);
+});
+
+test("opening a draft card takes it off the shelf: no duplicates on re-click", () => {
+  const opened = callbackBody("openDraftCard");
+  assert.match(opened, /parkedNewSessionDraftKey/);
+  assert.match(opened, /startNewSessionIn/);
+  assert.match(opened, /getDraftCardsStore\(\)\.remove\(card\.id\)/, "the card's content moves into the composer, so the card goes");
+});
+
+test("a watched run's end stamps Needs-you without unread or notification", () => {
+  const completion = between(
+    "const completedWithNotifications = finishedInBackground.filter(",
+    "previousRunningSessionIdsRef.current = runningSessionIds;",
+  );
+  assert.match(completion, /const finishedSelected = finishedSelectedSession\(/);
+  assert.match(completion, /if \(finishedSelected\.length > 0\) setSelectedCompletions\(finishedSelected\);/);
+  const tail = completion.slice(completion.indexOf("onBackgroundTaskDone"));
+  assert.doesNotMatch(tail, /setUnreadSessionIds/, "the open chat owes no dot: it is already being read");
+  assert.doesNotMatch(tail, /onBackgroundTaskDone\(\?.?\(\)/, "and no chime for a watched ending");
+  const stamp = between("const attention = new Set(", "void applyUiState({ action: \"set\", ids: roots");
+  assert.match(stamp, /\.\.\.selectedCompletions/);
 });
