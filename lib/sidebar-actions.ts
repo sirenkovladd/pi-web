@@ -25,6 +25,8 @@ export type SessionMenuActionId =
   | "mark-unread"
   | "archive"
   | "unarchive"
+  | "settle"
+  | "unsettle"
   | "delete";
 
 export type SessionMenuEntry =
@@ -54,6 +56,25 @@ export function sessionMenuEntries(
       { kind: "action", id: "delete", shortcut: "D" },
     ];
   }
+  if (context === "settled") {
+    return [
+      // A running family would come straight back: un-settling waits for the run.
+      status.running
+        ? { kind: "action", id: "unsettle", shortcut: "S", disabledReason: "running" }
+        : { kind: "action", id: "unsettle", shortcut: "S" },
+      { kind: "action", id: "rename", shortcut: "R" },
+      { kind: "action", id: "fork", shortcut: "F" },
+      { kind: "action", id: status.unread ? "mark-read" : "mark-unread", shortcut: "U" },
+      // A settled row is idle by construction, but a run may have started
+      // since the model was built: archiving still waits for it.
+      status.running
+        ? { kind: "action", id: "archive", shortcut: "A", disabledReason: "running" }
+        : { kind: "action", id: "archive", shortcut: "A" },
+      openNewTab,
+      { kind: "separator" },
+      { kind: "action", id: "delete", shortcut: "D" },
+    ];
+  }
   return [
     { kind: "action", id: context === "pinned" ? "unpin" : "pin", shortcut: "P" },
     { kind: "action", id: "rename", shortcut: "R" },
@@ -63,6 +84,10 @@ export function sessionMenuEntries(
     status.running
       ? { kind: "action", id: "archive", shortcut: "A", disabledReason: "running" }
       : { kind: "action", id: "archive", shortcut: "A" },
+    // A running family would come straight back: settling waits for the run.
+    status.running
+      ? { kind: "action", id: "settle", shortcut: "S", disabledReason: "running" }
+      : { kind: "action", id: "settle", shortcut: "S" },
     openNewTab,
     { kind: "separator" },
     { kind: "action", id: "delete", shortcut: "D" },

@@ -89,8 +89,8 @@ test("restore undoes an archive with the exact prior values", async () => {
   await reset();
   const start = await okState(await post({ action: "set", ids: ["keep"], pinned: true }));
   const prior = [
-    { id: "keep", pinnedAt: start.sessions.keep.pinnedAt, archivedAt: null },
-    { id: "fresh", pinnedAt: null, archivedAt: null },
+    { id: "keep", pinnedAt: start.sessions.keep.pinnedAt, archivedAt: null, settledAt: null },
+    { id: "fresh", pinnedAt: null, archivedAt: null, settledAt: null },
   ];
   await okState(await post({ action: "set", ids: ["keep", "fresh"], archived: true }));
   const restored = await okState(await post({ action: "restore", entries: prior }));

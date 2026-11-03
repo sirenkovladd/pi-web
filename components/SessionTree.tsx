@@ -112,6 +112,10 @@ export interface SessionTreeProps {
   /** Back to the base limit; key is a projectKey or PINNED_MORE_KEY. */
   onShowLess(key: string): void;
   onTogglePinned(): void;
+  onSettleFamily(family: SessionFamily): void;
+  onUnsettleFamily(family: SessionFamily): void;
+  /** A settled shelf's header toggle, per project. Page memory, never saved. */
+  onToggleSettled(projectKey: string): void;
   onArchiveFamily(family: SessionFamily): void;
   onRestoreFamily(family: SessionFamily): void;
   onOpenRowMenu(row: SessionRow, anchor: SidebarMenuAnchor, opener: HTMLElement | null): void;
@@ -524,6 +528,7 @@ const SessionRowView = memo(function SessionRowView({
     status.selected ? "is-selected" : "",
     status.running ? "is-running" : "",
     context === "archive" ? "is-archived" : "",
+    context === "settled" ? "is-settled" : "",
     menuOpen ? "is-menu-open" : "",
     confirming ? "is-confirming" : "",
     renaming ? "is-renaming" : "",
@@ -610,8 +615,9 @@ const SessionRowView = memo(function SessionRowView({
   }
 
   // Archive (or restore) one click away: desktop only, never for a running
-  // family, which would come straight back.
-  const quickAction = layout === "desktop" && (context === "archive" || !status.running);
+  // family, which would come straight back. A settled row offers the way
+  // back instead: un-settle, never settled twice.
+  const quickAction = layout === "desktop" && (context === "archive" || context === "settled" || !status.running);
 
   const mainContent = (
     <>
@@ -669,7 +675,20 @@ const SessionRowView = memo(function SessionRowView({
       )}
       {!status.transient && (
         <span className="session-tree-actions">
-          {quickAction && (context === "archive" ? (
+          {quickAction && (context === "settled" ? (
+            <button
+              type="button"
+              className="session-tree-action session-tree-quick-action"
+              aria-label={t("sidebar.unsettle")}
+              title={t("sidebar.unsettle")}
+              onClick={(event) => {
+                event.stopPropagation();
+                handlers.current.onUnsettleFamily(family);
+              }}
+            >
+              <RestoreIcon size={13} />
+            </button>
+          ) : context === "archive" ? (
             <button
               type="button"
               className="session-tree-action session-tree-quick-action"
@@ -1031,6 +1050,21 @@ const PlainRowView = memo(function PlainRowView({
                 aria-label={`${t("sidebar.newSessionActivity")} (${row.unread})`}
               />
             )}
+          </button>
+        </div>
+      );
+    case "settled-header":
+      return (
+        <div className="session-tree-row session-tree-settled-header" style={style} data-row-key={row.key}>
+          <button
+            type="button"
+            className="session-tree-settled-toggle"
+            aria-expanded={row.expanded}
+            onClick={() => handlers.current.onToggleSettled(row.projectKey)}
+          >
+            <ChevronIcon size={12} strokeWidth={3} className={`session-tree-chevron${row.expanded ? " is-open" : ""}`} />
+            <span className="session-tree-settled-label">{t("sidebar.settled")}</span>
+            <span className="session-tree-settled-count">· {row.count}</span>
           </button>
         </div>
       );

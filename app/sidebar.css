@@ -157,6 +157,44 @@
   font-weight: 400;
 }
 
+/* A settled shelf's header: the pinned header's smaller sibling. A section
+   label, not a project: its chevron in the groups' chevron column, the
+   label where the session titles start, small capitals in the label color. */
+.session-tree-settled-header {
+  align-items: stretch;
+}
+
+.session-tree-settled-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 0 8px 0 calc(var(--session-tree-inset-left) + 5px);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.session-tree-settled-toggle:hover {
+  color: var(--text);
+}
+
+.session-tree-settled-toggle:hover .session-tree-chevron {
+  color: var(--text-muted);
+}
+
+.session-tree-settled-label {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.session-tree-settled-count {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
 /* 5px off the count and each other: the toggle's 3px gap is the chevron's. */
 .session-tree-pinned-dot {
   flex: none;
@@ -318,6 +356,12 @@ a.session-tree-main {
 }
 
 .session-tree-session.is-archived .session-tree-title {
+  color: var(--text-muted);
+}
+
+/* A settled row reads finished, like an archived one: its title in the label
+   color, never the accent. */
+.session-tree-session.is-settled .session-tree-title {
   color: var(--text-muted);
 }
 

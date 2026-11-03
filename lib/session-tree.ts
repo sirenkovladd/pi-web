@@ -656,7 +656,7 @@ export function buildArchiveRows(
 }
 
 /**
- * Root ids of live, non-pinned, non-running, non-unread, non-selected
+ * Root ids of live, non-pinned, non-settled, non-running, non-unread, non-selected
  * families of `projectKey` whose latestModified is older than
  * now - olderThanMs. Transient families have no file and are never archived.
  */
@@ -671,6 +671,7 @@ export function familiesToArchive(
   for (const family of listSessionFamilies(input.sessions)) {
     if (familyProjectKey(family) !== projectKey) continue;
     if (isFamilyArchived(family, input.uiState, input.runningIds)) continue;
+    if (isFamilySettled(family, input.uiState, input.runningIds)) continue;
     if (isFamilyPinned(family, input.uiState, input.runningIds)) continue;
     const status = familyStatus(family, input);
     if (status.running || status.unread || status.selected || status.transient) continue;

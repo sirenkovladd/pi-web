@@ -19,6 +19,7 @@ import {
   forgetKeptOpenGroups,
   forgetShownMoreOfFolded,
   isFamilyArchived,
+  isFamilySettled,
   isGroupExpanded,
   keepOutgoingGroupOpen,
   nextProjectKeysToRecord,
@@ -344,6 +345,8 @@ const SESSION_ACTION_LABEL_KEYS: Record<SessionMenuActionId, string> = {
   "mark-unread": "sidebar.markUnread",
   archive: "sidebar.archive",
   unarchive: "sidebar.unarchive",
+  settle: "sidebar.settle",
+  unsettle: "sidebar.unsettle",
   delete: "sidebar.delete",
 };
 
@@ -358,6 +361,8 @@ function sessionActionIcon(id: SessionMenuActionId): ReactNode {
     case "mark-unread": return <DotIcon />;
     case "archive": return <ArchiveIcon />;
     case "unarchive": return <RestoreIcon />;
+    case "settle": return <CheckIcon />;
+    case "unsettle": return <RestoreIcon />;
     case "delete": return <TrashIcon />;
   }
 }
@@ -596,6 +601,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [keptOpenGroups, setKeptOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [moreShown, setMoreShown] = useState<Readonly<Record<string, number>>>({});
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
+  // Which settled shelves are unfolded, per projectKey. Page memory, never
+  // saved: the shelves fold by default on every load.
+  const [settledExpansion, setSettledExpansion] = useState<Readonly<Record<string, boolean>>>({});
   // The archive view's folded projects, per browser (lib/sidebar-prefs.ts).
   const [archiveCollapsed, setArchiveCollapsed] = useState<readonly string[]>([]);
   const [archiveView, setArchiveViewState] = useState(false);
@@ -1352,11 +1360,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
+  const sessionFamilies = useMemo(() => listSessionFamilies(allSessions), [allSessions]);
+  const familyByRootId = useMemo(
+    () => new Map(sessionFamilies.map((family) => [family.root.id, family])),
+    [sessionFamilies],
+  );
+
   const handleSelectSessionFromList = useCallback((s: SessionInfo, entryId?: string, blockIndex?: number, options?: SelectSessionOptions) => {
     setAllSessions((current) => current.some((session) => session.id === s.id) ? current : [s, ...current]);
     if (s.cwd) setSelectedCwd(s.cwd);
+    // A settled pick (sidebar search, a restored tab) unfolds its shelf:
+    // the selected row keeps its accent bar instead of hiding in the fold.
+    const family = familyByRootId.get(s.id);
+    if (family && isFamilySettled(family, uiState, runningSessionIds)) {
+      const key = workspaceKeyOf(family.root);
+      setSettledExpansion((prev) => (prev[key] === true ? prev : { ...prev, [key]: true }));
+    }
     onSelectSession(s, false, entryId, blockIndex, options);
-  }, [onSelectSession]);
+  }, [familyByRootId, onSelectSession, runningSessionIds, uiState]);
 
   // Every "new session" goes through here. The cwd moves first, on the click
   // path like a session pick, and the shell gets the target's project so it
@@ -1396,12 +1417,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [selectedCwd, startNewSessionIn]);
 
   const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
-
-  const sessionFamilies = useMemo(() => listSessionFamilies(allSessions), [allSessions]);
-  const familyByRootId = useMemo(
-    () => new Map(sessionFamilies.map((family) => [family.root.id, family])),
-    [sessionFamilies],
-  );
 
   // Every session id of an archived family (search tags them), and how many
   // families each project has in the archive.
@@ -1482,7 +1497,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     groupExpansion: shownGroupExpansion,
     moreShown,
     pinnedCollapsed,
-  }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
+    settledExpansion,
+  }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed, settledExpansion]);
   // Built while the archive view is rendered, its way out included: it
   // leaves as it was, not empty.
   const archiveMounted = archiveMotion.archiveMounted;
@@ -1598,11 +1614,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     [],
   );
 
-  // A family's row where the tree shows it now (pinned, in its group, or in
-  // the open archive view), else the selected tab.
+  // A family's row where the tree shows it now (pinned, in its group, in
+  // its settled shelf, or in the open archive view), else the selected tab.
   const familyRowButton = useCallback((rootId: string): HTMLElement | null => {
     const panel = sessionsPanelRef.current;
-    for (const context of ["pinned", "group", "archive"]) {
+    for (const context of ["pinned", "group", "settled", "archive"]) {
       const key = CSS.escape(`session:${context}:${rootId}`);
       const button = panel?.querySelector<HTMLElement>(`[data-row-key="${key}"] .session-tree-main`);
       if (button && button.getClientRects().length > 0) return button;
@@ -1867,6 +1883,67 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const restoreFamily = useCallback((family: SessionFamily) => restoreFamilies([family]), [restoreFamilies]);
 
+  // Settling folds a finished family to the bottom of its own group. Like
+  // archiving, it clears the family's unread markers (Undo brings them
+  // back), and a refused save rolls them back too. The shelf folds by
+  // default, so settling unfolds it: the row must not vanish without a trace.
+  const settleFamily = useCallback((family: SessionFamily) => {
+    if (family.root.transient) return;
+    if (familyIds(family).some((id) => runningSessionIds.has(id))) return;
+    const snapshot = snapshotUiState([family.root.id]);
+    const memberIds = familyIds(family);
+    const unreadBefore = memberIds.filter((id) => unreadSessionIds.has(id));
+    void applyUiState({ action: "set", ids: [family.root.id], settled: true }).then((ok) => {
+      if (ok || unreadBefore.length === 0) return;
+      restoreUnread(unreadBefore);
+    });
+    if (unreadBefore.length > 0) {
+      setUnreadSessionIds((prev) => {
+        const next = new Set(prev);
+        for (const id of memberIds) next.delete(id);
+        return next;
+      });
+    }
+    const key = workspaceKeyOf(family.root);
+    setSettledExpansion((prev) => (prev[key] === true ? prev : { ...prev, [key]: true }));
+    showToast(t("sidebar.settledToast", { title: shortTitle(sessionRowTitle(family.root), TOAST_TITLE_MAX) }), [
+      {
+        id: "undo",
+        label: t("sidebar.undo"),
+        onClick: () => {
+          void applyUiState({ action: "restore", entries: snapshot });
+          restoreUnread(unreadBefore);
+          // The toast held focus; the family back in the tree takes it.
+          focusAfterCommit(() => familyRowButton(family.root.id));
+        },
+      },
+    ]);
+  }, [applyUiState, familyRowButton, focusAfterCommit, restoreUnread, runningSessionIds, showToast, snapshotUiState, t, unreadSessionIds]);
+
+  // Out of the shelf: back to the active group, the toast's Undo restoring
+  // the settle exactly as it was.
+  const unsettleFamily = useCallback((family: SessionFamily) => {
+    if (family.root.transient) return;
+    const snapshot = snapshotUiState([family.root.id]);
+    void applyUiState({ action: "set", ids: [family.root.id], settled: false });
+    showToast(t("sidebar.unsettledToast", { title: shortTitle(sessionRowTitle(family.root), TOAST_TITLE_MAX) }), [
+      {
+        id: "undo",
+        label: t("sidebar.undo"),
+        onClick: () => {
+          void applyUiState({ action: "restore", entries: snapshot });
+          focusAfterCommit(() => familyRowButton(family.root.id));
+        },
+      },
+    ]);
+  }, [applyUiState, familyRowButton, focusAfterCommit, showToast, snapshotUiState, t]);
+
+  // A settled shelf unfolds per project, for the page's life. Never saved:
+  // a shelf opened once would otherwise greet every reload unfolded.
+  const toggleSettled = useCallback((projectKey: string) => {
+    setSettledExpansion((prev) => ({ ...prev, [projectKey]: !(prev[projectKey] === true) }));
+  }, []);
+
   const startRename = useCallback((family: SessionFamily) => {
     if (family.root.transient) return;
     setConfirmDeleteRootId(null);
@@ -2052,6 +2129,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       case "mark-unread": markFamilyRead(family, false); break;
       case "archive": archiveFamily(family); break;
       case "unarchive": restoreFamily(family); break;
+      case "settle": settleFamily(family); break;
+      case "unsettle": unsettleFamily(family); break;
       case "delete": requestDelete(family, shiftKey); break;
     }
   };
@@ -2675,6 +2754,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onShowMore: handleShowMore,
     onShowLess: handleShowLess,
     onTogglePinned: handleTogglePinned,
+    onSettleFamily: settleFamily,
+    onUnsettleFamily: unsettleFamily,
+    onToggleSettled: toggleSettled,
     onArchiveFamily: archiveFamily,
     onRestoreFamily: restoreFamily,
     onOpenRowMenu: openRowMenu,

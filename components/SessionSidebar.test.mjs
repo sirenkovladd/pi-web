@@ -483,3 +483,25 @@ test("the favicon counts sessions that finished while the tab was hidden (#1484)
     /\}, \[awaitingInputSessionIds, unreadSessionIds, hiddenFinishedSessionIds\]\);/,
   );
 });
+
+test("settling posts settled:true with Undo, un-settling posts settled:false", () => {
+  const settle = callbackBody("settleFamily");
+  assert.match(settle, /settled: true/);
+  assert.match(settle, /action: "restore"/);
+  assert.match(settle, /sidebar\.settledToast/);
+  assert.match(settle, /setSettledExpansion/);
+  const unsettle = callbackBody("unsettleFamily");
+  assert.match(unsettle, /settled: false/);
+  assert.match(unsettle, /action: "restore"/);
+  assert.match(unsettle, /sidebar\.unsettledToast/);
+  // A settled row is found where the tree shows it now, like pinned/group/archive rows.
+  assert.match(source, /\["pinned", "group", "settled", "archive"\]/);
+  // A settled pick unfolds its shelf instead of hiding the selected row in the fold.
+  const picked = callbackBody("handleSelectSessionFromList");
+  assert.match(picked, /isFamilySettled/);
+  assert.match(picked, /setSettledExpansion/);
+  assert.match(source, /settledExpansion/);
+  assert.match(source, /onToggleSettled/);
+  // The new rows have their rhythm and hook in the stylesheet.
+  assert.match(sidebarStyles, /\.session-tree-settled-header/);
+});
