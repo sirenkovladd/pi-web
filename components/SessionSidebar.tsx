@@ -5,6 +5,9 @@ import type { SessionInfo } from "@/lib/types";
 import { listSessionFamilies, type SessionFamily, isHiddenRelation } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { newSessionDeepLink, sessionDeepLink } from "@/lib/session-links";
+import { getDraftCardsStore, type DraftCard } from "@/lib/drafts-store";
+import { setDraft as saveComposerDraft, parkedNewSessionDraftKey } from "@/lib/draft-store";
+import { formatShortRelativeTime } from "@/lib/i18n/format";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import {
@@ -15,14 +18,18 @@ import {
   effectiveGroupExpansion,
   familiesToArchive,
   familiesToDelete,
+  attentionRootsNeedingFlag,
   familyIds,
+  finishedSelectedSession,
   forgetKeptOpenGroups,
   forgetShownMoreOfFolded,
   isFamilyArchived,
+  isFamilyFlagged,
   isGroupExpanded,
   keepOutgoingGroupOpen,
   nextProjectKeysToRecord,
   PINNED_MORE_KEY,
+  projectNameOf,
   showLessFamilies,
   showMoreFamilies,
   type SidebarProject,
@@ -344,6 +351,7 @@ const SESSION_ACTION_LABEL_KEYS: Record<SessionMenuActionId, string> = {
   "mark-unread": "sidebar.markUnread",
   archive: "sidebar.archive",
   unarchive: "sidebar.unarchive",
+  settle: "sidebar.settle",
   delete: "sidebar.delete",
 };
 
@@ -358,6 +366,7 @@ function sessionActionIcon(id: SessionMenuActionId): ReactNode {
     case "mark-unread": return <DotIcon />;
     case "archive": return <ArchiveIcon />;
     case "unarchive": return <RestoreIcon />;
+    case "settle": return <CheckIcon />;
     case "delete": return <TrashIcon />;
   }
 }
@@ -511,7 +520,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
 }
 
 export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   // Tracked in a ref only: the version is compared against the polled value to
@@ -555,6 +564,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [fileManagerError, setFileManagerError] = useState<string | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [awaitingInputSessionIds, setAwaitingInputSessionIds] = useState<Set<string>>(() => new Set());
+  // Watched runs that just ended, queued for the stamp effect: the unread
+  // path skips the selected session, so these arrive separately.
+  const [selectedCompletions, setSelectedCompletions] = useState<string[]>([]);
   // Sessions whose subagents can still report back with a run there: not done yet (#1434).
   const [subagentsActiveSessionIds, setSubagentsActiveSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
@@ -594,6 +606,20 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // (SHOW_MORE_STEP a click), the pinned section, the archive view.
   const [groupExpansion, setGroupExpansion] = useState<Readonly<Record<string, boolean>>>({});
   const [keptOpenGroups, setKeptOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
+  // The drafts shelf: unsent composer cards across every project, lived in
+  // a shared store (composers mirror into it) and synced across tabs.
+  const [draftCards, setDraftCards] = useState<DraftCard[]>(() => getDraftCardsStore().load().cards);
+  useEffect(() => {
+    const store = getDraftCardsStore();
+    const refresh = () => setDraftCards(store.load().cards);
+    const stop = store.subscribe(refresh);
+    const onStorage = (event: StorageEvent) => store.onStorageEvent(event.key);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      stop();
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
   const [moreShown, setMoreShown] = useState<Readonly<Record<string, number>>>({});
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   // The archive view's folded projects, per browser (lib/sidebar-prefs.ts).
@@ -1060,6 +1086,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (completedWithNotifications.length > 0) {
       onBackgroundTaskDone?.();
     }
+    // The watched run waits for settle or a reply too: queue its id for the
+    // stamp effect below (this effect sits above applyUiState's declaration).
+    const finishedSelected = finishedSelectedSession(
+      previousActiveSessionIdsRef.current,
+      active,
+      selectedSessionId,
+      new Set([...previousSuppressedCompletionSessionIdsRef.current, ...knownSubagentIds]),
+    );
+    if (finishedSelected.length > 0) setSelectedCompletions(finishedSelected);
 
     previousRunningSessionIdsRef.current = runningSessionIds;
     previousActiveSessionIdsRef.current = active;
@@ -1352,6 +1387,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
+  const sessionFamilies = useMemo(() => listSessionFamilies(allSessions), [allSessions]);
+  const familyByRootId = useMemo(
+    () => new Map(sessionFamilies.map((family) => [family.root.id, family])),
+    [sessionFamilies],
+  );
+
   const handleSelectSessionFromList = useCallback((s: SessionInfo, entryId?: string, blockIndex?: number, options?: SelectSessionOptions) => {
     setAllSessions((current) => current.some((session) => session.id === s.id) ? current : [s, ...current]);
     if (s.cwd) setSelectedCwd(s.cwd);
@@ -1371,6 +1412,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // The handle below is made once: it calls the newest closure.
   const startNewSessionInRef = useRef(startNewSessionIn);
   startNewSessionInRef.current = startNewSessionIn;
+
+  const openDraftCard = useCallback((card: DraftCard) => {
+    // The fresh composer in that cwd takes the parked draft back on mount.
+    // The card goes with it: its content moved into the composer, so a
+    // re-click opens no duplicate.
+    saveComposerDraft(parkedNewSessionDraftKey(card.cwd), { value: card.value, images: card.images });
+    getDraftCardsStore().remove(card.id);
+    startNewSessionIn({ cwd: card.cwd });
+  }, [startNewSessionIn]);
+  const deleteDraftCard = useCallback((id: string) => {
+    getDraftCardsStore().remove(id);
+  }, []);
 
   useImperativeHandle(controlRef, () => ({
     startNewSessionIn: (target) => startNewSessionInRef.current(target),
@@ -1396,12 +1449,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [selectedCwd, startNewSessionIn]);
 
   const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
-
-  const sessionFamilies = useMemo(() => listSessionFamilies(allSessions), [allSessions]);
-  const familyByRootId = useMemo(
-    () => new Map(sessionFamilies.map((family) => [family.root.id, family])),
-    [sessionFamilies],
-  );
 
   // Every session id of an archived family (search tags them), and how many
   // families each project has in the archive.
@@ -1598,11 +1645,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     [],
   );
 
-  // A family's row where the tree shows it now (pinned, in its group, or in
-  // the open archive view), else the selected tab.
+  // A family's row where the tree shows it now (pinned, in its group,
+  // or in the open archive view), else the selected tab.
   const familyRowButton = useCallback((rootId: string): HTMLElement | null => {
     const panel = sessionsPanelRef.current;
-    for (const context of ["pinned", "group", "archive"]) {
+    for (const context of ["pinned", "group", "needs", "working", "archive"]) {
       const key = CSS.escape(`session:${context}:${rootId}`);
       const button = panel?.querySelector<HTMLElement>(`[data-row-key="${key}"] .session-tree-main`);
       if (button && button.getClientRects().length > 0) return button;
@@ -1624,6 +1671,23 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (!ok) setUiWriteFailures((count) => count + 1);
     return ok;
   }, [applyUiStateRequest]);
+
+  // Stamp observed attention: a family seen awaiting or unread stays in
+  // Needs you until settled or archived, even after the dot is read away.
+  // The watched run joins through selectedCompletions: the unread path
+  // skips the selected session, so without this an open chat would fall
+  // back to its group instead of waiting for settle or a reply.
+  // The helper skips flagged, pinned and archived roots, so a stamp lands
+  // once and the effect goes quiet until new attention arrives.
+  useEffect(() => {
+    if (!uiStateLoaded || allSessions.length === 0) return;
+    const attention = new Set([...awaitingInputSessionIds, ...unreadSessionIds, ...selectedCompletions]);
+    if (selectedCompletions.length > 0) setSelectedCompletions([]);
+    if (attention.size === 0) return;
+    const roots = attentionRootsNeedingFlag(allSessions, uiState, attention);
+    if (roots.length === 0) return;
+    void applyUiState({ action: "set", ids: roots.slice(0, MAX_SESSION_UI_IDS_PER_REQUEST), needsYou: true });
+  }, [uiStateLoaded, allSessions, uiState, awaitingInputSessionIds, unreadSessionIds, selectedCompletions, applyUiState]);
   useEffect(() => {
     if (uiWriteFailures === shownUiWriteFailuresRef.current) return;
     shownUiWriteFailuresRef.current = uiWriteFailures;
@@ -1867,6 +1931,41 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const restoreFamily = useCallback((family: SessionFamily) => restoreFamilies([family]), [restoreFamilies]);
 
+  // Settling files a flagged family out of Needs you into its group as a
+  // plain row. Like archiving, it clears the family's unread markers (Undo
+  // brings them back), and a refused save rolls them back too. Typing in
+  // the chat re-stamps through the observe path: there is no un-settle.
+  const settleFamily = useCallback((family: SessionFamily) => {
+    if (family.root.transient) return;
+    if (familyIds(family).some((id) => runningSessionIds.has(id))) return;
+    const snapshot = snapshotUiState([family.root.id]);
+    const memberIds = familyIds(family);
+    const unreadBefore = memberIds.filter((id) => unreadSessionIds.has(id));
+    void applyUiState({ action: "set", ids: [family.root.id], needsYou: false }).then((ok) => {
+      if (ok || unreadBefore.length === 0) return;
+      restoreUnread(unreadBefore);
+    });
+    if (unreadBefore.length > 0) {
+      setUnreadSessionIds((prev) => {
+        const next = new Set(prev);
+        for (const id of memberIds) next.delete(id);
+        return next;
+      });
+    }
+    showToast(t("sidebar.settledToast", { title: shortTitle(sessionRowTitle(family.root), TOAST_TITLE_MAX) }), [
+      {
+        id: "undo",
+        label: t("sidebar.undo"),
+        onClick: () => {
+          void applyUiState({ action: "restore", entries: snapshot });
+          restoreUnread(unreadBefore);
+          // The toast held focus; the family back in the tree takes it.
+          focusAfterCommit(() => familyRowButton(family.root.id));
+        },
+      },
+    ]);
+  }, [applyUiState, familyRowButton, focusAfterCommit, restoreUnread, runningSessionIds, showToast, snapshotUiState, t, unreadSessionIds]);
+
   const startRename = useCallback((family: SessionFamily) => {
     if (family.root.transient) return;
     setConfirmDeleteRootId(null);
@@ -2052,6 +2151,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       case "mark-unread": markFamilyRead(family, false); break;
       case "archive": archiveFamily(family); break;
       case "unarchive": restoreFamily(family); break;
+      case "settle": settleFamily(family); break;
       case "delete": requestDelete(family, shiftKey); break;
     }
   };
@@ -2357,7 +2457,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     else filesPickerRef.current?.button("project")?.focus({ preventScroll: true });
   }, [filesShown, filesFocusRequest]);
 
-  const sessionMenuItems = (row: SessionRow): SidebarMenuItem[] => sessionMenuEntries(row.context, row.status).map((entry, index) => {
+  const sessionMenuItems = (row: SessionRow): SidebarMenuItem[] => sessionMenuEntries(
+    row.context,
+    row.status,
+    row.kind === "session" ? isFamilyFlagged(row.family, uiState) : false,
+  ).map((entry, index) => {
     if (entry.kind === "separator") return { type: "separator", id: `separator-${index}` };
     const label = t(SESSION_ACTION_LABEL_KEYS[entry.id]);
     return {
@@ -2675,6 +2779,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onShowMore: handleShowMore,
     onShowLess: handleShowLess,
     onTogglePinned: handleTogglePinned,
+    onSettleFamily: settleFamily,
     onArchiveFamily: archiveFamily,
     onRestoreFamily: restoreFamily,
     onOpenRowMenu: openRowMenu,
@@ -2989,6 +3094,38 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {/* Kept mounted under the archive view, so going back finds it as
                 it was: inert while the archive slides in, then hidden. */}
             <div className="sidebar-sessions-view" hidden={archiveMotion.mainHidden} inert={archiveMotion.mainInert}>
+              {draftCards.length > 0 && (
+                <div className="sidebar-drafts">
+                  <div className="sidebar-drafts-header">
+                    <span className="sidebar-drafts-label">{t("sidebar.drafts")}</span>
+                    <span className="sidebar-drafts-count">· {draftCards.length}</span>
+                  </div>
+                  {draftCards.map((card) => {
+                    const title = card.value.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? "";
+                    return (
+                      <div key={card.id} className="sidebar-drafts-row">
+                        <button
+                          type="button"
+                          className="sidebar-drafts-open"
+                          title={card.value}
+                          onClick={() => openDraftCard(card)}
+                        >
+                          <span className="sidebar-drafts-title">{title.slice(0, 50)}</span>
+                          <span className="sidebar-drafts-project">{projectByKey.get(card.projectKey)?.name ?? projectNameOf(card.cwd)}</span>
+                          {card.images.length > 0 && (
+                            <span className="sidebar-drafts-images" title={t("sidebar.draftImages", { count: card.images.length })}>
+                              · {t("sidebar.draftImages", { count: card.images.length })}
+                            </span>
+                          )}
+                          {card.truncated && <span className="sidebar-drafts-truncated">· {t("sidebar.draftImagesDropped")}</span>}
+                          <span className="sidebar-drafts-time">{formatShortRelativeTime(new Date(card.updatedAt), locale)}</span>
+                        </button>
+                        <DismissButton onClick={() => deleteDraftCard(card.id)} title={t("sidebar.draftDelete")} />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <SessionTree
                 {...treeProps}
                 rows={model.rows}

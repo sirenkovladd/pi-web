@@ -1073,8 +1073,12 @@ export function AppShell() {
   }, []);
 
   // Called by ChatWindow when a new session gets its real id from pi
-  const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string) => {
+  const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string, options?: { background?: boolean }) => {
     setRefreshKey((k) => k + 1);
+    // A background send stays where it is: the new run surfaces in Working
+    // while this view (and its composer) keeps going. The draft key and cwd
+    // stay so another background send can follow at once.
+    if (options?.background) return;
     if (activeNewSessionDraftKeyRef.current !== sourceDraftKey) return;
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;

@@ -39,6 +39,7 @@ import type { SidebarMenuAnchor } from "./SidebarMenu";
 import {
   ArchiveIcon,
   BranchIcon,
+  CheckIcon,
   ChevronIcon,
   FolderPlusIcon,
   MoreIcon,
@@ -112,6 +113,7 @@ export interface SessionTreeProps {
   /** Back to the base limit; key is a projectKey or PINNED_MORE_KEY. */
   onShowLess(key: string): void;
   onTogglePinned(): void;
+  onSettleFamily(family: SessionFamily): void;
   onArchiveFamily(family: SessionFamily): void;
   onRestoreFamily(family: SessionFamily): void;
   onOpenRowMenu(row: SessionRow, anchor: SidebarMenuAnchor, opener: HTMLElement | null): void;
@@ -629,6 +631,9 @@ const SessionRowView = memo(function SessionRowView({
           {branch}
         </span>
       )}
+      {(context === "needs" || context === "working") && (
+        <span className="session-tree-project">{row.project.name}</span>
+      )}
       <span className={`session-tree-meta${metaState}`} title={metaTitle}>{meta}</span>
     </>
   );
@@ -696,6 +701,25 @@ const SessionRowView = memo(function SessionRowView({
               <ArchiveIcon size={13} />
             </button>
           ))}
+          {/* Settle in one click, beside archive: flagged rows on a desktop,
+              in Needs you or pinned (group rows carry no flag by
+              construction). Typing in a filed chat pops it back.
+              A running family settles from its menu once idle; a mis-tap
+              unwinds through the Undo toast. */}
+          {layout === "desktop" && (context === "needs" || context === "pinned") && !status.running && status.flagged && (
+            <button
+              type="button"
+              className="session-tree-action session-tree-quick-action"
+              aria-label={t("sidebar.settle")}
+              title={t("sidebar.settle")}
+              onClick={(event) => {
+                event.stopPropagation();
+                handlers.current.onSettleFamily(family);
+              }}
+            >
+              <CheckIcon size={13} />
+            </button>
+          )}
           <button
             type="button"
             className={`session-tree-action session-tree-more-action${menuOpen ? " is-active" : ""}`}
@@ -1034,6 +1058,20 @@ const PlainRowView = memo(function PlainRowView({
           </button>
         </div>
       );
+    case "needs-header":
+      return (
+        <div className="session-tree-row session-tree-status-header" style={style} data-row-key={row.key}>
+          <span className="session-tree-status-label">{t("sidebar.needsYou")}</span>
+          <span className="session-tree-status-count">· {row.count}</span>
+        </div>
+      );
+    case "working-header":
+      return (
+        <div className="session-tree-row session-tree-status-header" style={style} data-row-key={row.key}>
+          <span className="session-tree-status-label">{t("sidebar.working")}</span>
+          <span className="session-tree-status-count">· {row.count}</span>
+        </div>
+      );
     case "pinned-more":
     case "group-more": {
       const moreKey = row.kind === "pinned-more" ? PINNED_MORE_KEY : row.projectKey;
@@ -1062,11 +1100,14 @@ const PlainRowView = memo(function PlainRowView({
         </div>
       );
     }
-    case "group-empty":
+    case "group-empty": {
+      const live = row.liveAbove ?? 0;
       return (
         <div className="session-tree-row session-tree-group-empty" style={style} data-row-key={row.key}>
-          <span className="session-tree-group-empty-label">{t("sidebar.noLiveSessions")}</span>
-          {!row.project.pinned && (
+          <span className="session-tree-group-empty-label">
+            {live > 0 ? t("sidebar.allLiveAbove", { count: live }) : t("sidebar.noLiveSessions")}
+          </span>
+          {live === 0 && !row.project.pinned && (
             <button
               type="button"
               className="session-tree-more-toggle"
@@ -1077,6 +1118,7 @@ const PlainRowView = memo(function PlainRowView({
           )}
         </div>
       );
+    }
     case "footer-open":
       return (
         <div className="session-tree-row session-tree-footer" style={style} data-row-key={row.key}>

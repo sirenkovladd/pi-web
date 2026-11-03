@@ -25,6 +25,7 @@ export type SessionMenuActionId =
   | "mark-unread"
   | "archive"
   | "unarchive"
+  | "settle"
   | "delete";
 
 export type SessionMenuEntry =
@@ -40,10 +41,14 @@ export type SessionMenuEntry =
 export function sessionMenuEntries(
   context: Extract<SidebarRow, { kind: "session" }>["context"],
   status: SidebarFamilyStatus,
+  flagged = false,
 ): SessionMenuEntry[] {
   if (status.transient) return [];
   const openNewTab: SessionMenuEntry = { kind: "action", id: "open-new-tab", shortcut: "T" };
-  if (context === "archive") {
+  // Status rows act on their family exactly like group rows: the tree
+  // only changed where the family shows, never what can be done to it.
+  const shape = context === "needs" || context === "working" ? "group" : context;
+  if (shape === "archive") {
     return [
       { kind: "action", id: "unarchive", shortcut: "A" },
       { kind: "action", id: "pin", shortcut: "P" },
@@ -55,7 +60,7 @@ export function sessionMenuEntries(
     ];
   }
   return [
-    { kind: "action", id: context === "pinned" ? "unpin" : "pin", shortcut: "P" },
+    { kind: "action", id: shape === "pinned" ? "unpin" : "pin", shortcut: "P" },
     { kind: "action", id: "rename", shortcut: "R" },
     { kind: "action", id: "fork", shortcut: "F" },
     { kind: "action", id: status.unread ? "mark-read" : "mark-unread", shortcut: "U" },
@@ -63,6 +68,14 @@ export function sessionMenuEntries(
     status.running
       ? { kind: "action", id: "archive", shortcut: "A", disabledReason: "running" }
       : { kind: "action", id: "archive", shortcut: "A" },
+    // Settle files a flagged family out of Needs you into its group; typing
+    // re-stamps, so there is no un-settle. A running family would come
+    // straight back: settling waits for the run.
+    ...(flagged
+      ? [status.running
+        ? { kind: "action", id: "settle", shortcut: "S", disabledReason: "running" } as const
+        : { kind: "action", id: "settle", shortcut: "S" } as const]
+      : []),
     openNewTab,
     { kind: "separator" },
     { kind: "action", id: "delete", shortcut: "D" },
