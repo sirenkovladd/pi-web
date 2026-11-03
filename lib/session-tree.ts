@@ -25,7 +25,7 @@ import { workspaceKeyOf } from "./workspace-memory";
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
   | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
-  | "spacer" | "footer-open" | "footer-archived" | "archive-group";
+  | "settled-header" | "spacer" | "footer-open" | "footer-archived" | "archive-group";
 
 /**
  * Per-kind row heights: one rhythm. Session rows, the section headers (a
@@ -36,8 +36,8 @@ export type SidebarRowKind =
  * group from the next and the groups from the footer.
  */
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
-  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
+  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, "settled-header": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
+  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, "settled-header": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
@@ -57,11 +57,12 @@ export interface SidebarFamilyStatus { running: boolean; awaiting: boolean; unre
 // input counts as awaiting, not running.
 export type SidebarRow =
   | { kind: "pinned-header"; key: "pinned-header"; count: number; collapsed: boolean; running: number; awaiting: number; unread: number }
-  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "archive"; project: SidebarProject; status: SidebarFamilyStatus }
+  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "settled" | "archive"; project: SidebarProject; status: SidebarFamilyStatus }
   | { kind: "pinned-more"; key: "pinned-more"; hidden: number; canShowLess: boolean; nextShown: number }
   | { kind: "group"; key: string; project: SidebarProject; expanded: boolean; running: number; awaiting: number; unread: number }
   | { kind: "group-more"; key: string; projectKey: string; hidden: number; canShowLess: boolean; nextShown: number }
   | { kind: "group-empty"; key: string; project: SidebarProject }
+  | { kind: "settled-header"; key: string; projectKey: string; project: SidebarProject; count: number; expanded: boolean }
   | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
@@ -86,6 +87,8 @@ export interface SessionTreeInput {
   /** Families revealed beyond the base limit by "show more", per projectKey or PINNED_MORE_KEY. */
   moreShown: Readonly<Record<string, number>>;
   pinnedCollapsed: boolean;
+  /** Per projectKey: whether its settled shelf is unfolded. Absent folds (the default). Page memory, never saved. */
+  settledExpansion?: Readonly<Record<string, boolean>>;
 }
 
 export interface SessionTreeModel {
@@ -159,10 +162,31 @@ export function isFamilyArchived(family: SessionFamily, state: SessionUiState, r
   return Number.isNaN(modified) || archivedAt >= modified;
 }
 
-/** pinnedAt set AND not isFamilyArchived. */
+/** pinnedAt set AND neither archived nor settled. */
 export function isFamilyPinned(family: SessionFamily, state: SessionUiState, runningIds: ReadonlySet<string>): boolean {
   return finiteNumber(familyEntry(state, family.root.id)?.pinnedAt) !== null
-    && !isFamilyArchived(family, state, runningIds);
+    && !isFamilyArchived(family, state, runningIds)
+    && !isFamilySettled(family, state, runningIds);
+}
+
+/**
+ * settledAt set AND no family member running AND (root.detailsPending OR
+ * settledAt >= Date.parse(root.modified)): the same shape as the archive
+ * rule, so a newer root message (from any client, including the pi CLI)
+ * returns the family on its own, while subagent-only activity does not.
+ */
+export function isFamilySettled(family: SessionFamily, state: SessionUiState, runningIds: ReadonlySet<string>): boolean {
+  const settledAt = finiteNumber(familyEntry(state, family.root.id)?.settledAt);
+  if (settledAt === null) return false;
+  if (anyMemberIn(family, runningIds)) return false;
+  if (family.root.detailsPending) return true;
+  const modified = Date.parse(family.root.modified);
+  return Number.isNaN(modified) || settledAt >= modified;
+}
+
+/** A settled shelf unfolds only while its project key is explicitly marked open. */
+export function isSettledExpanded(projectKey: string, settledExpansion: Readonly<Record<string, boolean>> | undefined): boolean {
+  return settledExpansion !== undefined && settledExpansion[projectKey] === true;
 }
 
 /** Last path segment of a project root, for "/" and "\\" paths alike. */
@@ -313,7 +337,7 @@ function createProjectResolver(
 
 function sessionRow(
   family: SessionFamily,
-  context: "pinned" | "group" | "archive",
+  context: "pinned" | "group" | "settled" | "archive",
   project: SidebarProject,
   input: FamilyFlagsInput,
 ): SidebarRow {
@@ -425,6 +449,9 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   const pinnedFamilies: SessionFamily[] = [];
   // Insertion order follows family activity (newest first).
   const projectFamilies = new Map<string, SessionFamily[]>();
+  // Settled families of each project, newest settlement first: folded behind
+  // a per-group header, never counted in the group's folded summary.
+  const settledFamilies = new Map<string, SessionFamily[]>();
   const projectActivity = new Map<string, number>();
   // Projects with a live family that has a file (pinned families included).
   const savedKeys = new Set<string>();
@@ -439,6 +466,12 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     const activity = timeOf(family.latestModified);
     projectActivity.set(key, Math.max(projectActivity.get(key) ?? -Infinity, activity));
     if (!family.root.transient) savedKeys.add(key);
+    if (isFamilySettled(family, uiState, runningIds)) {
+      const list = settledFamilies.get(key);
+      if (list) list.push(family);
+      else settledFamilies.set(key, [family]);
+      continue;
+    }
     if (isFamilyPinned(family, uiState, runningIds)) {
       pinnedFamilies.push(family);
       continue;
@@ -472,6 +505,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   }
 
   // Projects: live non-pinned families, the current project, pinned projects.
+  // A project of settled families only still gets its group (with the shelf).
   const projectKeys: string[] = [...projectFamilies.keys()];
   const seen = new Set(projectKeys);
   const addKey = (key: string) => {
@@ -479,6 +513,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     seen.add(key);
     projectKeys.push(key);
   };
+  for (const key of settledFamilies.keys()) addKey(key);
   if (currentProject) addKey(currentProject.key);
   for (const key of Object.keys(uiState.projects)) addKey(key);
 
@@ -530,13 +565,21 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     rows.push({ kind: "group", key: `group:${project.key}`, project, expanded, running, awaiting, unread });
 
     if (expanded) {
-      if (groupFamilies.length === 0) {
+      if (groupFamilies.length === 0 && (settledFamilies.get(project.key)?.length ?? 0) === 0) {
         rows.push({ kind: "group-empty", key: `empty:${project.key}`, project });
       } else {
         const { visible, revealed, nextShown } = visibleFamilies(groupFamilies, GROUP_VISIBLE_LIMIT, shownMoreFor(input.moreShown, project.key), input);
         for (const family of visible) rows.push(sessionRow(family, "group", project, input));
         const more = moreRowState(groupFamilies.length, visible.length, revealed);
         if (more) rows.push({ kind: "group-more", key: `more:${project.key}`, projectKey: project.key, ...more, nextShown });
+        const settled = settledFamilies.get(project.key) ?? [];
+        if (settled.length > 0) {
+          const settledExpanded = isSettledExpanded(project.key, input.settledExpansion);
+          rows.push({ kind: "settled-header", key: `settled:${project.key}`, projectKey: project.key, project, count: settled.length, expanded: settledExpanded });
+          if (settledExpanded) {
+            for (const family of settled) rows.push(sessionRow(family, "settled", project, input));
+          }
+        }
       }
     }
   }
