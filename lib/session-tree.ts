@@ -25,7 +25,7 @@ import { workspaceKeyOf } from "./workspace-memory";
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
   | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
-  | "needs-header" | "working-header" | "spacer" | "footer-open" | "footer-archived" | "archive-group";
+  | "needs-header" | "working-header" | "divider" | "spacer" | "footer-open" | "footer-archived" | "archive-group";
 
 /**
  * Per-kind row heights: one rhythm. Session rows, the section headers (a
@@ -36,8 +36,8 @@ export type SidebarRowKind =
  * group from the next and the groups from the footer.
  */
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, "needs-header": 28, "working-header": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
-  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, "needs-header": 44, "working-header": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
+  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, "needs-header": 28, "working-header": 28, divider: 12, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
+  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, "needs-header": 44, "working-header": 44, divider: 12, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
@@ -68,7 +68,8 @@ export type SidebarRow =
   | { kind: "group-empty"; key: string; project: SidebarProject; liveAbove?: number }
   | { kind: "needs-header"; key: "needs-header"; count: number }
   | { kind: "working-header"; key: "working-header"; count: number }
-  | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
+  | { kind: "divider"; key: "status-divider" }
+  | { kind: "spacer"; key: "top-spacer" | "footer-spacer" | `group-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
   | { kind: "archive-group"; key: string; project: SidebarProject; count: number; expanded: boolean };
@@ -532,11 +533,11 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
 
   // A spacer keeps the first section's header off the toolbar's line (#1338).
   // One spacer parts two blocks, never two in a row: a block that follows
-  // a spacer (the first group after the pinned section, the footer after
-  // nothing) adds none.
+  // a spacer or a divider (the two never stack) adds none.
   const rows: SidebarRow[] = [{ kind: "spacer", key: "top-spacer" }];
   const gap = (key: `group-spacer:${string}` | "footer-spacer") => {
-    if (rows[rows.length - 1]?.kind !== "spacer") rows.push({ kind: "spacer", key });
+    const last = rows[rows.length - 1]?.kind;
+    if (last !== "spacer" && last !== "divider") rows.push({ kind: "spacer", key });
   };
 
   // Pinned section: newest pin first; ties keep family activity order.
@@ -556,7 +557,6 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
       const more = moreRowState(sorted.length, visible.length, revealed);
       if (more) rows.push({ kind: "pinned-more", key: "pinned-more", ...more, nextShown });
     }
-    rows.push({ kind: "spacer", key: "pinned-spacer" });
   }
 
   // Projects: live non-pinned families, the current project, pinned projects.
@@ -630,6 +630,13 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
     gap("group-spacer:working");
     rows.push({ kind: "working-header", key: "working-header", count: workingFamilies.length });
     for (const family of workingFamilies) rows.push(sessionRow(family, "working", resolver.get(familyProjectKey(family)), input));
+  }
+
+  // One hairline parts the status block (pinned, Needs you, Working) from
+  // the projects, only while any of it shows: groups alone start under the
+  // toolbar with no line.
+  if (pinnedFamilies.length > 0 || needsFamilies.length > 0 || workingFamilies.length > 0) {
+    rows.push({ kind: "divider", key: "status-divider" });
   }
 
   for (const project of orderedProjects) {
@@ -836,7 +843,8 @@ export function groupBlocks(rows: readonly SidebarRow[], offsets: readonly numbe
       continue;
     }
     let above = index;
-    while (above > 0 && rows[above - 1].kind === "spacer") above--;
+    // The status divider reads as separation, like a spacer, for the drop line.
+    while (above > 0 && (rows[above - 1].kind === "spacer" || rows[above - 1].kind === "divider")) above--;
     let end = index + 1;
     while (end < rows.length && isGroupMemberRow(rows[end])) end++;
     let below = end;

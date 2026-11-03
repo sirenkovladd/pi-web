@@ -500,7 +500,7 @@ test("renders the model built from a catalog with unique row keys", () => {
   const html = render({ rows: model.rows });
   const keys = renderedKeys(html);
   assert.equal(new Set(keys).size, keys.length);
-  assert.deepEqual(keys, ["pinned-header", "session:pinned:b", "working-header", "session:working:a", "group:/work/app", "empty:/work/app", "footer-open"]);
+  assert.deepEqual(keys, ["pinned-header", "session:pinned:b", "working-header", "session:working:a", "status-divider", "group:/work/app", "empty:/work/app", "footer-open"]);
   const familyRow = rowMarkup(html, "session:working:a");
   assert.match(familyRow, /is-selected/);
   assert.match(familyRow, /aria-label="Agent running…"/);
@@ -587,13 +587,16 @@ test("headers lead with their chevron, and every row's text starts in one column
   assert.doesNotMatch(css, /\.is-mobile \.session-tree-(?:session|group-toggle|group-empty|more|pinned-toggle|status-header|archive-group|footer-button) \{[^}]*padding/);
   // One rhythm: session rows, every header (a project's, the pinned
   // section's, the status sections, the archive's projects), the empty note and
-  // the footer are one height, 28px (44px on a phone); only "show more" is shorter.
-  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, "needs-header": 28, "working-header": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 });
+  // the footer are one height, 28px (44px on a phone); only "show more" is shorter
+  // and the divider keeps its 12px hairline row on both layouts.
+  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, "needs-header": 28, "working-header": 28, divider: 12, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 });
   for (const [layout, height] of [["desktop", 28], ["mobile", 44]]) {
     for (const kind of ["session", "group", "pinned-header", "group-empty", "needs-header", "working-header", "footer-open", "footer-archived", "archive-group"]) {
       assert.equal(SIDEBAR_ROW_HEIGHTS[layout][kind], height, `${layout} ${kind}`);
     }
   }
+  assert.equal(SIDEBAR_ROW_HEIGHTS.desktop.divider, 12, "desktop divider");
+  assert.equal(SIDEBAR_ROW_HEIGHTS.mobile.divider, 12, "mobile divider");
 });
 
 test("group headers draw nothing for a drag while idle", () => {
@@ -687,4 +690,12 @@ test("draft rows keep the session-row rhythm: inset, rounded, hover", () => {
 
 test("status rows name their project on one line, never wrapped", () => {
   assert.match(cssRule(".session-tree-project"), /white-space: nowrap;/);
+});
+
+test("the status divider draws a hairline across the rows' width", () => {
+  const html = rowMarkup(render({ rows: [{ kind: "divider", key: "status-divider" }] }), "status-divider");
+  assert.match(html, /class="session-tree-row session-tree-divider"/);
+  assert.match(html, /aria-hidden="true"/);
+  assert.match(cssRule(".session-tree-divider"), /align-items: center;/);
+  assert.match(css, /\.session-tree-divider::before \{\s*content: "";\s*flex: 1;\s*border-top: 1px solid var\(--border\);/);
 });
