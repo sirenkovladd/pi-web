@@ -1072,6 +1072,10 @@ const PlainRowView = memo(function PlainRowView({
           <span className="session-tree-status-count">· {row.count}</span>
         </div>
       );
+    case "divider":
+      return (
+        <div className="session-tree-row session-tree-divider" style={style} data-row-key={row.key} aria-hidden="true" />
+      );
     case "pinned-more":
     case "group-more": {
       const moreKey = row.kind === "pinned-more" ? PINNED_MORE_KEY : row.projectKey;

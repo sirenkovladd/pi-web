@@ -235,7 +235,20 @@
   margin-left: auto;
 }
 
-/* The status sections' headers: static labels, never toggles. The label
+/* The hairline parting the status block (pinned, Needs you, Working) from
+   the projects: a 1px line in the label color, centered in its 12px row,
+   running the rows' full width. */
+.session-tree-divider {
+  display: flex;
+  align-items: center;
+}
+
+.session-tree-divider::before {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+  margin: 0 var(--session-tree-inset-right) 0 var(--session-tree-inset-left);
+}
    where the session titles start, small capitals in the label color, the
    count in meta right after it. */
 .session-tree-status-header {
