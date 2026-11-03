@@ -500,6 +500,9 @@ test("settling posts settled:true with Undo, un-settling posts settled:false", (
   const picked = callbackBody("handleSelectSessionFromList");
   assert.match(picked, /isFamilySettled/);
   assert.match(picked, /setSettledExpansion/);
+  // Any other path to a settled selection (deep link, reload, restored tab)
+  // unfolds it too: an effect watches the selected family, not the click.
+  assert.match(source, /useEffect\(\(\) => \{[\s\S]{0,600}setSettledExpansion/);
   assert.match(source, /settledExpansion/);
   assert.match(source, /onToggleSettled/);
   // The new rows have their rhythm and hook in the stylesheet.

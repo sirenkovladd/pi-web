@@ -1944,6 +1944,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     setSettledExpansion((prev) => ({ ...prev, [projectKey]: !(prev[projectKey] === true) }));
   }, []);
 
+  // A settled selection from any path (deep link, reload, restored tab, not
+  // just the sidebar's own picks) unfolds its shelf: the selected row keeps
+  // its accent bar instead of hiding in the fold.
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const family = familyByRootId.get(selectedSessionId)
+      ?? sessionFamilies.find((candidate) => candidate.subagents.some((session) => session.id === selectedSessionId));
+    if (!family || !isFamilySettled(family, uiState, runningSessionIds)) return;
+    const key = workspaceKeyOf(family.root);
+    setSettledExpansion((prev) => (prev[key] === true ? prev : { ...prev, [key]: true }));
+  }, [selectedSessionId, familyByRootId, sessionFamilies, uiState, runningSessionIds]);
+
   const startRename = useCallback((family: SessionFamily) => {
     if (family.root.transient) return;
     setConfirmDeleteRootId(null);
